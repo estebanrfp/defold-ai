@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/hero.png" alt="Defold AI — Editor automation via MCP" width="700">
+  <img src="docs/images/hero.webp" alt="Defold Game Engine — MCP bridge for AI editors" width="700">
 </p>
 
 # Defold AI
