@@ -153,33 +153,63 @@ function M.manage(body)
     local content, rerr = util.read_file("game.project")
     if not content then return util.error_response("READ_ERROR", rerr) end
     local value_str = tostring(value)
-    -- Locate the section.
-    local section_start, section_end = content:find("%[" .. section .. "%]")
-    if not section_start then
-      -- Append a new section at the end.
-      if content:sub(-1) ~= "\n" then content = content .. "\n" end
-      content = content .. "\n[" .. section .. "]\n" .. prop .. " = " .. value_str .. "\n"
-    else
-      -- Find next section to know boundaries of this section.
-      local after = section_end + 1
-      local next_section = content:find("\n%[", after)
-      local sec_body = next_section and content:sub(after, next_section)
-                                   or content:sub(after)
-      local key_pattern = "(\n)" .. prop .. "%s*=%s*[^\n]+"
-      if sec_body:find(key_pattern) then
-        -- Replace in place.
-        local replaced = sec_body:gsub(key_pattern, "%1" .. prop .. " = " .. value_str, 1)
-        content = content:sub(1, after - 1) .. replaced ..
-                  (next_section and content:sub(next_section + #sec_body) or "")
+    -- Parse the INI into a structured form (preserves blank lines + key order).
+    -- Sections: list of { name = "...", lines = { "key = value", "", ... } }.
+    local sections = {}
+    local current = { name = "__preamble", lines = {} }
+    table.insert(sections, current)
+    for line in (content .. "\n"):gmatch("([^\n]*)\n") do
+      local sec_name = line:match("^%s*%[([^%]]+)%]%s*$")
+      if sec_name then
+        current = { name = sec_name, lines = {} }
+        table.insert(sections, current)
       else
-        -- Insert after section header (after the next newline).
-        local insert_at = content:find("\n", after) or (#content + 1)
-        content = content:sub(1, insert_at) ..
-                  prop .. " = " .. value_str .. "\n" ..
-                  content:sub(insert_at + 1)
+        table.insert(current.lines, line)
       end
     end
-    local wok, werr = util.write_file("game.project", content)
+    -- Find or create the target section.
+    local target
+    for _, s in ipairs(sections) do
+      if s.name == section then target = s; break end
+    end
+    if not target then
+      target = { name = section, lines = { prop .. " = " .. value_str } }
+      table.insert(sections, target)
+    else
+      -- Update or insert prop. Match `<prop>` exactly at line start (ignore whitespace).
+      local found = false
+      for i, line in ipairs(target.lines) do
+        local lkey = line:match("^%s*([%w_%-%.]+)%s*=")
+        if lkey == prop then
+          target.lines[i] = prop .. " = " .. value_str
+          found = true
+          break
+        end
+      end
+      if not found then
+        -- Append, trimming trailing blank lines first so the section stays tight.
+        while #target.lines > 0 and target.lines[#target.lines]:match("^%s*$") do
+          table.remove(target.lines)
+        end
+        table.insert(target.lines, prop .. " = " .. value_str)
+      end
+    end
+    -- Re-render: preamble (no header), then each section.
+    local out = {}
+    for i, s in ipairs(sections) do
+      if s.name ~= "__preamble" then
+        if i > 1 then table.insert(out, "") end
+        table.insert(out, "[" .. s.name .. "]")
+      end
+      for _, line in ipairs(s.lines) do
+        table.insert(out, line)
+      end
+    end
+    local new_content = table.concat(out, "\n")
+    -- Trim duplicate trailing newlines, leave exactly one.
+    new_content = new_content:gsub("\n+$", "\n")
+    if not new_content:match("\n$") then new_content = new_content .. "\n" end
+    local wok, werr = util.write_file("game.project", new_content)
     if not wok then return util.error_response("WRITE_ERROR", tostring(werr)) end
     return { ok = true, key = key, value = value_str }
 

@@ -49,16 +49,77 @@ local function _format_quat(v)
     tostring(v.w or v[4] or 1))
 end
 
+-- Render `children: "..."` lines (one per child id). Defold parent-child in
+-- collections is expressed on the parent instance, not the child.
+local function _children_block(children)
+  if not children or #children == 0 then return "" end
+  local out = {}
+  for _, child_id in ipairs(children) do
+    table.insert(out, '  children: "' .. tostring(child_id) .. '"')
+  end
+  return table.concat(out, "\n") .. "\n"
+end
+
+-- Render `component_properties { ... }` blocks for per-instance script
+-- property overrides. `props` is a table mapping component id (the script's
+-- component id, usually "script") to a property dict.
+local function _detect_prop_type(v)
+  if type(v) == "number" then return "PROPERTY_TYPE_NUMBER", tostring(v) end
+  if type(v) == "boolean" then return "PROPERTY_TYPE_BOOLEAN", v and "true" or "false" end
+  if type(v) == "string" then
+    if v:match("^hash:") then return "PROPERTY_TYPE_HASH", v:sub(6) end
+    if v:match("^url:") then return "PROPERTY_TYPE_URL", v:sub(5) end
+    return "PROPERTY_TYPE_HASH", v
+  end
+  if type(v) == "table" then
+    if v.w ~= nil then
+      return "PROPERTY_TYPE_VECTOR4", string.format("%s,%s,%s,%s", v.x or 0, v.y or 0, v.z or 0, v.w)
+    elseif v.z ~= nil then
+      return "PROPERTY_TYPE_VECTOR3", string.format("%s,%s,%s", v.x or 0, v.y or 0, v.z or 0)
+    end
+  end
+  return "PROPERTY_TYPE_NUMBER", "0"
+end
+
+local function _script_properties_block(props)
+  if not props then return "" end
+  local out = {}
+  for comp_id, prop_dict in pairs(props) do
+    table.insert(out, '  component_properties {')
+    table.insert(out, '    id: "' .. tostring(comp_id) .. '"')
+    for pname, pvalue in pairs(prop_dict) do
+      local ptype, pstr = _detect_prop_type(pvalue)
+      table.insert(out, '    properties {')
+      table.insert(out, '      id: "' .. tostring(pname) .. '"')
+      table.insert(out, '      value: "' .. pstr .. '"')
+      table.insert(out, '      type: ' .. ptype)
+      table.insert(out, '    }')
+    end
+    table.insert(out, '  }')
+  end
+  if #out == 0 then return "" end
+  return table.concat(out, "\n") .. "\n"
+end
+
 local function _instance_block(kind, id, body)
-  -- kind is "instances" (reference) or "embedded_instances"
+  -- kind is "instances" (reference), "embedded_instances" (inline GO),
+  -- or "collection_instances" (reference to a .collection).
   local pos = _format_vec3(body.position, false)
   local rot = _format_quat(body.rotation)
   local sca = _format_vec3(body.scale, true)
-  if kind == "instances" then
+  local children = _children_block(body.children)
+  local props = _script_properties_block(body.script_properties)
+  if kind == "collection_instances" then
+    local proto = util.norm_resource_path(body.collection or "")
+    return string.format(
+      "collection_instances {\n  id: \"%s\"\n  collection: \"%s\"\n%s%s  position %s\n  rotation %s\n  scale3 %s\n}\n",
+      id, proto, children, props, pos, rot, sca
+    )
+  elseif kind == "instances" then
     local prototype = util.norm_resource_path(body.prototype or "")
     return string.format(
-      "instances {\n  id: \"%s\"\n  prototype: \"%s\"\n  position %s\n  rotation %s\n  scale3 %s\n}\n",
-      id, prototype, pos, rot, sca
+      "instances {\n  id: \"%s\"\n  prototype: \"%s\"\n%s%s  position %s\n  rotation %s\n  scale3 %s\n}\n",
+      id, prototype, children, props, pos, rot, sca
     )
   else
     -- Embedded: render the GO body using gameobject's renderer, then escape it.
@@ -72,8 +133,8 @@ local function _instance_block(kind, id, body)
     end
     table.insert(escaped_lines, '  ""')
     return string.format(
-      "embedded_instances {\n  id: \"%s\"\n  data:\n%s\n  position %s\n  rotation %s\n  scale3 %s\n}\n",
-      id, table.concat(escaped_lines, '\n'), pos, rot, sca
+      "embedded_instances {\n  id: \"%s\"\n  data:\n%s\n%s%s  position %s\n  rotation %s\n  scale3 %s\n}\n",
+      id, table.concat(escaped_lines, '\n'), children, props, pos, rot, sca
     )
   end
 end
@@ -129,7 +190,8 @@ function M.manage(body)
 
   elseif op == "add_embedded" then
     -- Append an embedded GO instance to an existing .collection file.
-    -- params: path, id, components (list), position?, rotation?, scale?
+    -- params: path, id, components (list), position?, rotation?, scale?,
+    --         children? (list of sibling instance ids to parent under this one)
     local path = util.norm_resource_path(params.path or "")
     if path == "" then return util.error_response("MISSING_PARAM", "add_embedded needs path") end
     local id = params.id or ""
@@ -144,6 +206,50 @@ function M.manage(body)
     local wok, werr = util.write_file(path, content)
     if not wok then return util.error_response("WRITE_ERROR", werr) end
     return { ok = true, path = path, id = id, component_count = #params.components }
+
+  elseif op == "add_collection_instance" then
+    -- Append a collection reference instance (`collection_instances { ... }`).
+    -- params: path (parent .collection), id, collection (the .collection to instance),
+    --         position?, rotation?, scale?
+    local path = util.norm_resource_path(params.path or "")
+    if path == "" then return util.error_response("MISSING_PARAM", "add_collection_instance needs path") end
+    local id = params.id or ""
+    local coll = util.norm_resource_path(params.collection or "")
+    if id == "" or coll == "" then
+      return util.error_response("MISSING_PARAM", "add_collection_instance needs id + collection")
+    end
+    local content, err = util.read_file(path)
+    if not content then return util.error_response("READ_ERROR", err) end
+    if content:sub(-1) ~= "\n" then content = content .. "\n" end
+    content = content .. _instance_block("collection_instances", id, params)
+    local wok, werr = util.write_file(path, content)
+    if not wok then return util.error_response("WRITE_ERROR", werr) end
+    return { ok = true, path = path, id = id, collection = coll }
+
+  elseif op == "set_parent" then
+    -- Add a `children: "<child_id>"` line to an existing instance block.
+    -- params: path, parent_id, child_id
+    local path = util.norm_resource_path(params.path or "")
+    local parent_id = params.parent_id or ""
+    local child_id = params.child_id or ""
+    if path == "" or parent_id == "" or child_id == "" then
+      return util.error_response("MISSING_PARAM", "set_parent needs path + parent_id + child_id")
+    end
+    local content, err = util.read_file(path)
+    if not content then return util.error_response("READ_ERROR", err) end
+    -- Locate the parent block. Match `(embedded_)?instances {` containing id: "parent_id".
+    local marker = 'id: "' .. parent_id .. '"'
+    local id_pos = content:find(marker, 1, true)
+    if not id_pos then return util.error_response("NOT_FOUND", "parent instance not found: " .. parent_id) end
+    -- Find the closing `}` of that block (no nesting at top level of instance{}).
+    local close_pos = content:find("\n}", id_pos, true)
+    if not close_pos then return util.error_response("PARSE_ERROR", "could not find end of parent block") end
+    -- Insert child line just before the closing brace, on its own line.
+    local child_line = '  children: "' .. child_id .. '"\n'
+    content = content:sub(1, close_pos) .. child_line .. content:sub(close_pos + 1)
+    local wok, werr = util.write_file(path, content)
+    if not wok then return util.error_response("WRITE_ERROR", werr) end
+    return { ok = true, path = path, parent_id = parent_id, child_id = child_id }
 
   elseif op == "remove_instance" then
     local path = util.norm_resource_path(params.path or "")

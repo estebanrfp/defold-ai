@@ -18,19 +18,39 @@ def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
           • ``create``(path, name=""): create a new .collection at path
           • ``open``(path): open an existing .collection
           • ``save``(): save the currently edited collection
-          • ``add_instance``(path, id, prototype, position?, rotation?, scale?):
+
+          • ``add_instance``(path, id, prototype, position?, rotation?, scale?,
+              children?, script_properties?):
             Append a GO reference (``instances {...}``) to an existing
-            .collection file. ``prototype`` is the res:// path of the .go.
-          • ``add_embedded``(path, id, components=[...], position?, rotation?, scale?):
+            .collection file. ``children`` is a list of sibling instance ids
+            that become this instance's transform children.
+            ``script_properties`` is ``{component_id: {prop_name: value, ...}}``
+            and emits a ``component_properties { ... }`` block — perfect for
+            tinting/configuring re-used prototypes without one-off .go files.
+
+          • ``add_embedded``(path, id, components=[...], position?, rotation?,
+              scale?, children?, script_properties?):
             Append a GO defined inline (``embedded_instances {...}``). The
             ``components`` list uses the same schema as
             ``gameobject_manage(op="create_file")``.
-          • ``remove_instance``(path, id): Remove an instance (reference or
-            embedded) by id.
+
+          • ``add_collection_instance``(path, id, collection, position?, …,
+              children?, script_properties?):
+            Append a ``collection_instances {...}`` entry that re-uses a
+            whole .collection as a sub-tree.
+
+          • ``set_parent``(path, parent_id, child_id):
+            Append ``children: "<child_id>"`` to the named parent instance
+            block. Idempotency is the caller's responsibility — calling twice
+            with the same pair emits two entries.
+
+          • ``remove_instance``(path, id): Remove an instance (reference,
+            embedded, or collection_instance) by id.
+
           • ``save_as`` / ``get_roots``: planned (Defold editor API gap).
 
-        Position/rotation/scale accept ``{x,y,z[,w]}`` dicts. Defaults: zero
-        position, identity rotation, unit scale.
+        Position / rotation / scale accept ``{x, y, z[, w]}`` dicts. Defaults:
+        zero position, identity rotation, unit scale.
         """
         return client.call("collection_manage", {"op": op, "params": params or {}})
 

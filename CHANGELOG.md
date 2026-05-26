@@ -18,6 +18,60 @@ Planned next:
 - `editor_screenshot` — pending Defold editor-script API.
 - Windows discovery paths for `find_defold_toolchain` (currently best-effort).
 - An `examples/applegame` folder so the README walkthrough is runnable.
+- Reliable hot-reload of handlers (current `editor_reload_plugin` is
+  unreliable — see Known issues in 0.3.0).
+
+## [0.3.0] — 2026-05-26
+
+Driven by a 3D port of the same Godot voxel game (player rig with 6 cube
+parts + tinted prototypes shared across scene objects). Every gap that
+forced manual editing during the 2D port was already closed in 0.2.0;
+this release closes the gaps that 3D / multi-instance scenes exposed.
+
+### Added
+
+- **`collection_manage(add_instance / add_embedded)`** now accepts:
+  - `children` — list of sibling instance ids that become this instance's
+    transform children. Emits the proper `children: "<id>"` lines on the
+    parent (where Defold's `.collection` schema actually places them).
+  - `script_properties` — `{component_id: {prop_name: value, ...}}` maps to a
+    `component_properties { ... }` block on the instance. Type detection
+    handles number / boolean / hash / url / vec3 / vec4 automatically. This
+    is the missing piece that lets you re-use one prototype across many
+    instances (e.g. a single `part.go` cube tinted six ways for a character
+    rig) instead of one .go per colour.
+- **`collection_manage(add_collection_instance)`** — append
+  `collection_instances { ... }` entries that re-use a whole `.collection`
+  as a sub-tree.
+- **`collection_manage(set_parent)`** — append a `children: "<child_id>"`
+  line to an existing parent instance block. Useful when the parent block
+  was created before its children existed.
+
+### Changed
+
+- **`project_manage(settings_set)`** rewritten with a proper INI
+  parser (sections preserved by name; per-section key list preserved by
+  order). The 0.2.0 implementation used regex over the raw text and on
+  certain inputs (e.g. setting a key whose name was a suffix of an
+  existing one) silently corrupted `game.project` by inserting fragments
+  like `state = 1`. The new parser is line-based and section-scoped, so
+  unrelated keys are byte-for-byte preserved. Discovered by writing
+  `render.clear_color_red` next to an unrelated `[script] shared_state`.
+
+### Fixed
+
+- `settings_set` no longer corrupts `game.project` when the new key
+  shares a suffix with an existing one in a different section.
+
+### Known issues
+
+- **`editor_reload_plugin` is unreliable for module updates.** It clears
+  `package.loaded["mcp.*"]`, but Defold appears to keep a bytecode cache
+  past that hook so a freshly edited handler is sometimes ignored until a
+  full editor restart. Workaround: restart Defold (`quit + open`) when a
+  handler change doesn't take effect after one re-call. The MCP entry
+  point (`mcp.editor_script`) is unaffected — it always needs a restart
+  or *Project > Reload Editor Scripts*.
 
 ## [0.2.0] — 2026-05-26
 
@@ -147,6 +201,7 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/estebanrfp/defold-ai/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/estebanrfp/defold-ai/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/estebanrfp/defold-ai/releases/tag/v0.1.0
