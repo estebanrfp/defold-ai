@@ -11,16 +11,37 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- A first-party Defold-engine-side capture endpoint (planned: inject a
-  `game_helper.lua` at `project_run` time, similar to godot-ai's runtime
-  helper). The current OS-shell approach needs macOS Screen Recording
-  permission — works once granted, but the helper approach would
-  bypass that entirely.
+- A first-party engine-side capture endpoint via `game_helper.lua`
+  injection at `project_run` time.
 - `gameobject_manage(duplicate / rename / reparent)`.
 - `collection_manage(save_as / get_roots)`.
 - A reliable hot-reload path.
 - Linux / Windows paths for `find_defold_toolchain` + `editor_screenshot`.
 - `examples/applegame` runnable demo.
+
+## [0.11.0] — 2026-05-27
+
+Documentation pass — everything added in 0.4 → 0.10 is now reflected
+in the user-facing docs.
+
+### Changed
+
+- **`docs/TOOLS.md`** rewritten end-to-end. The status table now lists
+  every op of every tool (instead of just the tool names), the example
+  walkthrough is replaced with a "build a 3D scene in ~10 MCP calls"
+  flow that uses the new `render_manage` / `material_manage` /
+  `camera_manage` / `particlefx_manage` preset APIs, and the
+  "Defold API limitations" section is honest about what still doesn't
+  work.
+- **`README.md`** updated:
+  - Hero subtitle calls out the v0.10.0 capabilities.
+  - Boot-line example reflects the new tool count (35 vs the old 28).
+  - Tools table groups resources + presets together
+    (`material_manage` / `render_manage` / `camera_manage` /
+    `particlefx_manage`) so newcomers see the preset libraries
+    immediately.
+  - Status section drops the "alpha, ~16 tools" framing — replaces it
+    with the real shipped surface + known gaps from `[Unreleased]`.
 
 ## [0.10.0] — 2026-05-27
 
@@ -441,7 +462,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/estebanrfp/defold-ai/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/estebanrfp/defold-ai/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/estebanrfp/defold-ai/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/estebanrfp/defold-ai/compare/v0.7.0...v0.8.0
