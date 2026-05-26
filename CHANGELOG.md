@@ -11,8 +11,6 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- `render_manage(create)` — generate `.render` + `.render_script` pair
-  from a small DSL (passes / cull / depth / blend per pass).
 - `camera_manage` — abstraction over `camera` component + follow rigs
   (`follow_2d` / `follow_3d` orbital).
 - `editor_screenshot` — investigating the `dmengine` debug HTTP API.
@@ -23,6 +21,43 @@ Planned next:
   full editor restart).
 - Windows paths for `find_defold_toolchain`.
 - `examples/applegame` runnable demo.
+
+## [0.7.0] — 2026-05-27
+
+Render pipeline authoring. Stops users from copy-pasting Defold's
+`builtins/render/default.render_script` every time they need a custom
+pass.
+
+### Added
+
+- **`render_manage(create)`** — generate a `.render_script` + `.render`
+  pair from a small DSL. Either pass a `preset` name or a custom
+  `passes` list:
+
+  ```jsonc
+  {
+    "op": "create",
+    "params": {
+      "path": "/main/game",
+      "passes": [
+        { "predicate": "sky",      "cull": "front", "depth_write": false, "blend": false },
+        { "predicate": "model",    "cull": "back",  "depth_write": true,  "blend": false },
+        { "predicate": "particle", "cull": "none",  "depth_write": false, "blend": true  },
+        { "predicate": "gui",      "projection": "ortho_window", "blend": true },
+        { "predicate": "debug_text","projection": "ortho_window", "blend": true }
+      ],
+      "activate": true
+    }
+  }
+  ```
+
+  When `activate=true`, also rewrites `[bootstrap] render = ...` in
+  `game.project` so the new pipeline takes over on the next build.
+- **Built-in presets** — `default_3d`, `default_3d_with_sky`,
+  `default_2d`. The "with sky" preset is exactly what the AppleGame 3D
+  demo needed: a `sky` predicate drawn first with depth-write off and
+  front-face culling.
+- **`render_manage(list_presets)`** — enumerate preset names.
 
 ## [0.6.0] — 2026-05-26
 
@@ -312,7 +347,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/estebanrfp/defold-ai/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/estebanrfp/defold-ai/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/estebanrfp/defold-ai/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/estebanrfp/defold-ai/compare/v0.3.0...v0.4.0

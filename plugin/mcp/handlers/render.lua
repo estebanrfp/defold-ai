@@ -1,0 +1,264 @@
+-- Render pipeline authoring — generates `.render` + `.render_script` pairs
+-- from a small DSL of named passes. Inspired by godot-ai's pipeline_manage.
+--
+-- A `pass` is a dict:
+--   { predicate = "sky" | "model" | "tile" | "particle" | "gui" | "debug_text",
+--     cull = "back" | "front" | "none",  -- default "back"
+--     depth_write = true | false,         -- default true
+--     depth_test = true | false,          -- default true
+--     blend = true | false,               -- default false (opaque)
+--     projection = "camera" | "ortho_window", -- default "camera"
+--     custom_setup = "...lua snippet..."  -- raw lua inserted before render.draw
+--   }
+--
+-- The 'gui' / 'debug_text' predicates are special-cased: they switch to a
+-- screen-aligned ortho projection because they always render in pixel space.
+
+local util = require "mcp.lib.util"
+
+local M = {}
+
+-- ---------------------------------------------------------------- presets ----
+
+local _CULL = {
+  back = "FACE_TYPE_BACK", front = "FACE_TYPE_FRONT", none = nil,
+}
+
+local PRESETS = {
+  -- A vanilla 3D pipeline: opaque models -> translucent tiles/particles -> GUI.
+  default_3d = {
+    { predicate = "model",      cull = "back",  depth_write = true,  depth_test = true,  blend = false },
+    { predicate = "tile",       cull = "none",  depth_write = false, depth_test = true,  blend = true  },
+    { predicate = "particle",   cull = "none",  depth_write = false, depth_test = true,  blend = true  },
+    { predicate = "gui",        projection = "ortho_window", blend = true },
+    { predicate = "debug_text", projection = "ortho_window", blend = true },
+  },
+  -- 3D pipeline with a sky predicate drawn first (depth_write off, cull front
+  -- so the inside of an inverted sphere renders).
+  default_3d_with_sky = {
+    { predicate = "sky",        cull = "front", depth_write = false, depth_test = true,  blend = false },
+    { predicate = "model",      cull = "back",  depth_write = true,  depth_test = true,  blend = false },
+    { predicate = "tile",       cull = "none",  depth_write = false, depth_test = true,  blend = true  },
+    { predicate = "particle",   cull = "none",  depth_write = false, depth_test = true,  blend = true  },
+    { predicate = "gui",        projection = "ortho_window", blend = true },
+    { predicate = "debug_text", projection = "ortho_window", blend = true },
+  },
+  -- 2D pipeline: tiles, particles, GUI. No 3D depth.
+  default_2d = {
+    { predicate = "tile",       cull = "none",  depth_write = false, depth_test = false, blend = true },
+    { predicate = "particle",   cull = "none",  depth_write = false, depth_test = false, blend = true },
+    { predicate = "gui",        projection = "ortho_window", blend = true },
+    { predicate = "debug_text", projection = "ortho_window", blend = true },
+  },
+}
+
+-- --------------------------------------------------------- template render --
+
+-- Render a single pass to Lua source. Predicates are looked up from
+-- self.predicates created in init().
+local function _pass_to_lua(p)
+  local lines = {}
+  local indent = "    "
+  table.insert(lines, indent .. '-- pass: ' .. tostring(p.predicate))
+  -- Projection switch
+  if p.projection == "ortho_window" then
+    table.insert(lines, indent .. 'render.set_view(vmath.matrix4())')
+    table.insert(lines, indent .. 'render.set_projection(vmath.matrix4_orthographic(0, w, 0, h, -1, 1))')
+  end
+  -- Depth state
+  if p.depth_test == false then
+    table.insert(lines, indent .. 'render.disable_state(graphics.STATE_DEPTH_TEST)')
+  else
+    table.insert(lines, indent .. 'render.enable_state(graphics.STATE_DEPTH_TEST)')
+  end
+  table.insert(lines, indent ..
+    'render.set_depth_mask(' .. ((p.depth_write == false) and "false" or "true") .. ')')
+  -- Cull state
+  local cull = _CULL[p.cull or "back"]
+  if cull == nil then
+    table.insert(lines, indent .. 'render.disable_state(graphics.STATE_CULL_FACE)')
+  else
+    table.insert(lines, indent .. 'render.enable_state(graphics.STATE_CULL_FACE)')
+    table.insert(lines, indent .. 'render.set_cull_face(graphics.' .. cull .. ')')
+  end
+  -- Blend
+  if p.blend then
+    table.insert(lines, indent .. 'render.enable_state(graphics.STATE_BLEND)')
+  else
+    table.insert(lines, indent .. 'render.disable_state(graphics.STATE_BLEND)')
+  end
+  if p.custom_setup and p.custom_setup ~= "" then
+    table.insert(lines, indent .. p.custom_setup)
+  end
+  table.insert(lines, indent ..
+    'render.draw(self.predicates.' .. tostring(p.predicate) .. ')')
+  return table.concat(lines, "\n")
+end
+
+local function _render_script_source(spec)
+  -- Collect unique predicate names from the passes (order preserved).
+  local seen, names = {}, {}
+  for _, p in ipairs(spec.passes) do
+    if not seen[p.predicate] then
+      seen[p.predicate] = true
+      table.insert(names, '"' .. p.predicate .. '"')
+    end
+  end
+
+  local header = [[
+-- Generated by defold-ai render_manage. Edits will be overwritten the
+-- next time render_manage is called with the same path.
+
+local function create_predicates(...)
+    local out = {}
+    for _, name in ipairs({...}) do
+        out[name] = render.predicate({ name })
+    end
+    return out
+end
+
+local function set_clear_color(state)
+    local c = vmath.vector4(
+        sys.get_config_number("render.clear_color_red",   0),
+        sys.get_config_number("render.clear_color_green", 0),
+        sys.get_config_number("render.clear_color_blue",  0),
+        sys.get_config_number("render.clear_color_alpha", 0))
+    state.clear_buffers = {
+        [graphics.BUFFER_TYPE_COLOR0_BIT]   = c,
+        [graphics.BUFFER_TYPE_DEPTH_BIT]    = 1,
+        [graphics.BUFFER_TYPE_STENCIL_BIT]  = 0,
+    }
+end
+
+local function bind_camera(state)
+    local cams = camera.get_cameras()
+    if #cams > 0 then
+        for i = #cams, 1, -1 do
+            if camera.get_enabled(cams[i]) then
+                render.set_camera(cams[i], { use_frustum = true })
+                return
+            end
+        end
+    end
+    render.set_view(vmath.matrix4())
+    render.set_projection(vmath.matrix4_orthographic(
+        0, render.get_width(), 0, render.get_height(), -1, 1))
+end
+]]
+
+  local init = string.format([[
+
+function init(self)
+    self.predicates = create_predicates(%s)
+    self.state = {}
+    set_clear_color(self.state)
+end
+]], table.concat(names, ", "))
+
+  local pass_body = {}
+  for _, p in ipairs(spec.passes) do
+    table.insert(pass_body, _pass_to_lua(p))
+  end
+
+  local update = [[
+
+function update(self)
+    local w, h = render.get_window_width(), render.get_window_height()
+    if w == 0 or h == 0 then return end
+
+    render.set_depth_mask(true)
+    render.set_stencil_mask(0xff)
+    render.clear(self.state.clear_buffers)
+
+    bind_camera(self.state)
+    render.set_viewport(0, 0, w, h)
+    render.set_blend_func(graphics.BLEND_FACTOR_SRC_ALPHA,
+                          graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+
+]] .. table.concat(pass_body, "\n\n") .. [[
+
+
+    render.draw_debug3d()
+end
+
+function on_message(self, message_id, message)
+    if message_id == hash("clear_color") and message.color then
+        self.state.clear_buffers[graphics.BUFFER_TYPE_COLOR0_BIT] = message.color
+    end
+end
+]]
+
+  return header .. init .. update
+end
+
+-- ---------------------------------------------------------- public ops -----
+
+function M.manage(body)
+  local op = body.op or ""
+  local params = body.params or {}
+
+  if op == "list_presets" then
+    local out = {}
+    for k, _ in pairs(PRESETS) do table.insert(out, k) end
+    table.sort(out)
+    return { ok = true, presets = out }
+
+  elseif op == "create" then
+    -- params:
+    --   path: res:// path WITHOUT extension OR ending in .render
+    --         (the .render_script is written alongside it)
+    --   preset?: name from PRESETS
+    --   passes?: list of pass dicts (overrides preset if both given)
+    --   activate?: bool — if true, sets bootstrap.render in game.project
+    local path = util.norm_resource_path(params.path or "")
+    if path == "" then return util.error_response("MISSING_PARAM", "create needs path") end
+    if not path:match("%.render$") then path = path .. ".render" end
+    local script_path = path:gsub("%.render$", ".render_script")
+    local passes
+    if params.passes then
+      passes = params.passes
+    elseif params.preset then
+      passes = PRESETS[params.preset]
+      if not passes then
+        local names = {}
+        for k, _ in pairs(PRESETS) do table.insert(names, k) end
+        return util.error_response("UNKNOWN_PRESET",
+          "Preset '" .. params.preset .. "' unknown. Available: " ..
+          table.concat(names, ", "))
+      end
+    else
+      return util.error_response("MISSING_PARAM",
+        "create needs either 'preset' or 'passes'")
+    end
+    local script_src = _render_script_source({ passes = passes })
+    local render_src = string.format('script: "%s"\n', script_path)
+    editor.create_resources({
+      { script_path, script_src },
+      { path, render_src },
+    })
+    local result = { ok = true, render = path, script = script_path, passes = #passes }
+    -- Optional: activate by writing bootstrap.render in game.project.
+    if params.activate then
+      local content, rerr = util.read_file("game.project")
+      if content then
+        local target = path .. "c"  -- compiled extension
+        if content:find("bootstrap%.render") then
+          content = content:gsub("(bootstrap%.render%s*=%s*)[^\n]+", "%1" .. target)
+        elseif content:find("%[bootstrap%]") then
+          content = content:gsub("(%[bootstrap%][^%[]-)", "%1render = " .. target .. "\n", 1)
+        else
+          content = content .. "\n[bootstrap]\nrender = " .. target .. "\n"
+        end
+        util.write_file("game.project", content)
+        result.activated = true
+        result.bootstrap_render = target
+      else
+        result.activate_error = rerr
+      end
+    end
+    return result
+  end
+  return util.error_response("UNKNOWN_OP", "Unknown render_manage op: " .. op)
+end
+
+return M

@@ -112,6 +112,30 @@ def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
         return client.call("tilesource_manage", {"op": op, "params": params or {}})
 
     @mcp.tool()
+    def render_manage(op: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Render pipeline (.render + .render_script) authoring.
+
+        Defold's default render script does opaque models → tiles → particles → GUI.
+        For 3D projects that need a sky pass, depth tweaks, or any pipeline
+        customisation, this tool generates the pair from a small DSL.
+
+        Ops:
+          • ``list_presets``(): enumerate built-in presets.
+          • ``create``(path, preset?, passes?, activate=False):
+            Generate a `.render_script` + `.render` pair at `path` (the
+            extension is added if missing). Pick a `preset`
+            (``default_3d`` | ``default_3d_with_sky`` | ``default_2d``)
+            or pass a custom `passes` list:
+            ``[{predicate, cull?: "back"|"front"|"none", depth_write?,
+                depth_test?, blend?, projection?: "camera"|"ortho_window",
+                custom_setup?: "raw lua"}]``
+            When ``activate=True``, also rewrites
+            ``[bootstrap] render = ...`` in game.project so the new pipeline
+            is picked up on the next build.
+        """
+        return client.call("render_manage", {"op": op, "params": params or {}})
+
+    @mcp.tool()
     def tilemap_manage(op: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Tilemap (.tilemap) resource ops.
 
