@@ -11,14 +11,41 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- `editor_screenshot` — investigating the `dmengine` debug HTTP API.
-- `node_find` / `collection_get_hierarchy` paginated reads with name/type
-  filters (port of godot-ai's pagination helpers).
+- `editor_screenshot` — still gated by macOS Screen Recording permission
+  and Defold has no first-party engine-side capture endpoint. Looking at
+  injecting a `game_helper.lua` at project_run time that exposes a
+  capture endpoint, similar to godot-ai's runtime helper.
 - `gameobject_manage(duplicate / rename / reparent)`.
 - `collection_manage(save_as / get_roots)`.
 - A reliable hot-reload path.
 - Windows paths for `find_defold_toolchain`.
 - `examples/applegame` runnable demo.
+
+## [0.9.0] — 2026-05-27
+
+### Changed
+
+- **`gameobject_find`** — now paginated with richer filtering, ported
+  from `godot-ai`'s `node_find` pattern:
+    - New params: ``component_type`` (e.g. `"model"`, `"camera"`),
+      ``max_depth`` (default 16), ``offset`` / ``limit`` (default
+      0/200).
+    - Each match now includes ``id``, ``type``, ``path``, ``depth`` and
+      ``component_types`` (a list of component types the GO carries).
+    - Response gained ``total``, ``offset``, ``limit``, ``has_more`` so
+      callers can page through large scenes without grabbing everything
+      into one response.
+    - Existing callers keep working — ``name_pattern`` and
+      ``type_filter`` remain the same.
+
+### Known issues
+
+- `editor_screenshot` is still unimplemented. macOS `screencapture`
+  needs Screen Recording permission, and Defold's engine service
+  (`http://localhost:8001`) returns the profiler HTML for unknown
+  paths — there is no built-in `/capture` endpoint. The CHANGELOG
+  Unreleased section tracks the planned `game_helper.lua` injection
+  approach.
 
 ## [0.8.0] — 2026-05-27
 
@@ -378,7 +405,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/estebanrfp/defold-ai/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/estebanrfp/defold-ai/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/estebanrfp/defold-ai/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/estebanrfp/defold-ai/compare/v0.5.0...v0.6.0

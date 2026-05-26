@@ -69,12 +69,36 @@ def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
         collection: str = "",
         name_pattern: str = "",
         type_filter: str = "",
+        component_type: str = "",
+        max_depth: int = 16,
+        offset: int = 0,
+        limit: int = 200,
     ) -> dict[str, Any]:
-        """Find game objects matching a name pattern / component type."""
+        """Search a collection's GO tree with optional filters + pagination.
+
+        Args:
+            collection: res:// path to a .collection (required).
+            name_pattern: substring (case-sensitive) the GO id must contain.
+            type_filter: exact match against the GO's type string.
+            component_type: only return GOs that have a component of this type
+                (e.g. ``"model"``, ``"collisionobject"``, ``"camera"``).
+            max_depth: walk depth cap (default 16).
+            offset: pagination start (default 0).
+            limit: max results per page (default 200).
+
+        Returns dict with:
+            matches: list of ``{id, type, path, depth, component_types}``.
+            total: total filtered count before slicing.
+            has_more: bool — whether another page exists.
+        """
         return client.call("gameobject_find", {
             "collection": collection,
             "name_pattern": name_pattern,
             "type_filter": type_filter,
+            "component_type": component_type,
+            "max_depth": max_depth,
+            "offset": offset,
+            "limit": limit,
         })
 
     @mcp.tool()

@@ -193,27 +193,86 @@ function M.get_properties(body)
 end
 
 function M.find(body)
+  -- Paginated walk of a collection's tree, with name/type filters.
+  --
+  -- params:
+  --   collection:    res:// path to a .collection (required)
+  --   name_pattern:  substring (case-sensitive) the id must contain (optional)
+  --   type_filter:   exact match against the GO's type string (optional)
+  --   component_type: only match GOs that have a component of this type
+  --                   (e.g. "model", "collisionobject", "camera") (optional)
+  --   max_depth:     walk depth cap (default 16)
+  --   offset / limit: pagination over the filtered match list (defaults 0/200)
+  --
+  -- Returns:
+  --   matches:    [{ id, type, path, depth, component_types: [...] }]
+  --   total:      total filtered count (before slicing)
+  --   has_more:   bool
   local collection = util.norm_resource_path(body.collection or "")
   if collection == "" then
     return util.error_response("MISSING_PARAM", "find needs 'collection'")
   end
+  if not editor.resource_attributes(collection).exists then
+    return util.error_response("NOT_FOUND", "Collection not found at " .. collection)
+  end
   local pattern = body.name_pattern or ""
   local type_filter = body.type_filter or ""
-  local matches = {}
-  local function walk(node)
-    if editor.can_get(node, "children") then
-      for _, child in ipairs(editor.get(node, "children") or {}) do
-        local name = util.try_get(child, "id") or ""
-        local match = (pattern == "" or string.find(tostring(name), pattern) ~= nil)
-        if match then
-          table.insert(matches, { name = tostring(name), node = tostring(child) })
+  local component_type = body.component_type or ""
+  local max_depth = body.max_depth or 16
+  local offset = body.offset or 0
+  local limit = body.limit or 200
+
+  local function comp_types(node)
+    if not editor.can_get(node, "components") then return {} end
+    local out = {}
+    for _, c in ipairs(editor.get(node, "components") or {}) do
+      local t = util.try_get(c, "type")
+      if t then table.insert(out, tostring(t)) end
+    end
+    return out
+  end
+
+  local all = {}
+  local function walk(node, depth)
+    if depth > max_depth then return end
+    if not editor.can_get(node, "children") then return end
+    for _, child in ipairs(editor.get(node, "children") or {}) do
+      local id = tostring(util.try_get(child, "id") or "")
+      local t  = tostring(util.try_get(child, "type") or "?")
+      local ctypes = comp_types(child)
+      local ok = true
+      if pattern ~= "" and not id:find(pattern, 1, true) then ok = false end
+      if ok and type_filter ~= "" and t ~= type_filter then ok = false end
+      if ok and component_type ~= "" then
+        local has = false
+        for _, ct in ipairs(ctypes) do
+          if ct == component_type then has = true; break end
         end
-        walk(child)
+        if not has then ok = false end
       end
+      if ok then
+        table.insert(all, {
+          id = id, type = t, depth = depth,
+          path = tostring(child),
+          component_types = ctypes,
+        })
+      end
+      walk(child, depth + 1)
     end
   end
-  walk(collection)
-  return { ok = true, matches = matches }
+  walk(collection, 0)
+
+  local total = #all
+  local sliced = {}
+  for i = offset + 1, math.min(total, offset + limit) do
+    table.insert(sliced, all[i])
+  end
+  return {
+    ok = true, collection = collection,
+    matches = sliced, total = total,
+    offset = offset, limit = limit,
+    has_more = (offset + #sliced) < total,
+  }
 end
 
 function M.manage(body)
