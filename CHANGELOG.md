@@ -17,6 +17,63 @@ Planned next:
 - Linux / Windows paths for `find_defold_toolchain` + `editor_screenshot(source="macos")`.
 - `examples/applegame` runnable demo.
 
+## [0.13.0] — 2026-05-27
+
+`editor_screenshot(source="game")` finally just works end-to-end. The
+custom dmengine (built once when the project has native dependencies)
+loads the screenshot extension, which **self-registers a `/screenshot`
+HTTP endpoint on the engine service** — no helper script, no file
+trigger, no polling needed.
+
+### Added
+
+- **`project_run`** picks up the **custom build engine** when the project
+  has native dependencies (a custom dmengine produced by the extender
+  service lives at `build/<arch>-<os>/dmengine`). Also `chmod +x` the
+  binary and resolve the absolute path so the launching shell finds it.
+- **`project_manage(build)`** runs `bob resolve build` (instead of just
+  `build`) when `game.project` has a `dependencies = ...` line, so the
+  first build after a `editor_screenshot_install` call downloads and
+  compiles the native extension automatically.
+
+### Changed
+
+- **`editor_screenshot(source="game")`** now:
+  1. Discovers the engine-service port via `lsof` + `/ping`.
+  2. `curl http://localhost:<port>/screenshot` — the extension writes a
+     PNG to `/var/folders/.../defold-screenshot/screenshot-N.png` and
+     replies `{ "path": "..." }`.
+  3. Copies the PNG into the project at `.defold_ai_capture.png` and
+     returns both `path` (project-relative) and `source_path`
+     (absolute temp path) plus `size` and `engine_service_port`.
+
+  The total flow is one MCP call + one HTTP roundtrip to the running
+  engine, ~10 ms. No file polling, no helper Lua script, no autoload.
+
+- **`editor_screenshot_install`** trimmed to just one job: append
+  `britzl/defold-screenshot` to `[project] dependencies` in
+  `game.project` (idempotent). No longer writes
+  `/defold_ai/helper.script` or `/defold_ai/helper.go`, no longer
+  modifies `main.collection`.
+
+### Removed
+
+- The file-polling handshake (trigger marker + output file) added in
+  v0.12.0 — turned out the extension's own `/screenshot` endpoint
+  is simpler and faster. The helper-script approach stays in the v0.12
+  CHANGELOG entry as a historical note.
+
+### Notes
+
+This release closes the screenshot story for real. The flow is now:
+
+```
+editor_screenshot_install      ←  one call, adds dependency
+project_manage(build)          ←  bob 'resolve build', ~15s first time
+project_run                    ←  custom dmengine, /screenshot endpoint live
+editor_screenshot(source=game) ←  PNG path returned in <50ms
+```
+
 ## [0.12.0] — 2026-05-27
 
 Game-side `editor_screenshot` lands. Cross-platform, no OS permissions.
@@ -514,7 +571,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/estebanrfp/defold-ai/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/estebanrfp/defold-ai/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/estebanrfp/defold-ai/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/estebanrfp/defold-ai/compare/v0.9.0...v0.10.0

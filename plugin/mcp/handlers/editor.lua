@@ -54,59 +54,85 @@ end
 
 -- ---------------------------------------------------------- game capture ----
 
+-- Find the engine service port of a running dmengine. Defold's HTTP engine
+-- service listens on port 8001 by default but binds elsewhere when the port
+-- is taken. We probe `lsof` for any dmengine TCP listener that answers /ping.
+local function _find_engine_service_port()
+  local out = util.run_shell(
+    "lsof -i -P -n -sTCP:LISTEN -a -c dmengine 2>/dev/null") or ""
+  for port_str in out:gmatch(":(%d+)%s*%(LISTEN%)") do
+    local probe = util.run_shell(
+      "curl -s -o /dev/null -w '%{http_code}' --max-time 1 http://localhost:" ..
+      port_str .. "/ping 2>/dev/null") or ""
+    if probe:gsub("%s+", "") == "200" then return tonumber(port_str) end
+  end
+  return nil
+end
+
+-- Capture via the running dmengine's HTTP engine service. Requires the
+-- britzl/defold-screenshot extension in game.project (call
+-- editor_screenshot_install to add it). The extension registers a
+-- /screenshot endpoint on the engine service that writes a PNG to a
+-- temp file and replies with `{ path = "..." }`.
 local function _capture_via_game(body)
   body = body or {}
   local timeout_s = body.timeout or 5
-  local out_path = _project_path(OUTPUT_FILENAME)
-  local trigger  = _project_path(TRIGGER_FILENAME)
+  local out_path = body.path  -- optional copy destination
 
-  -- 1. Pre-check: helper must be installed
-  if not _file_exists(_project_path("defold_ai/helper.script")) then
-    return util.error_response("SETUP_REQUIRED",
-      "Game-side helper not installed. Call editor_screenshot_install once " ..
-      "to write /defold_ai/helper.* + add britzl/defold-screenshot dep " ..
-      "to game.project. Then project_run again so the helper is active.",
-      { missing = "/defold_ai/helper.script" })
-  end
-
-  -- 2. Pre-check: dmengine must be running (the helper polls the trigger)
-  local ps_out = util.run_shell("pgrep -x dmengine") or ""
-  if ps_out:gsub("%s+", "") == "" then
+  -- 1. Engine must be running
+  local port = _find_engine_service_port()
+  if not port then
     return util.error_response("ENGINE_NOT_RUNNING",
-      "dmengine is not running. Call project_run first, then this screenshot.")
+      "No dmengine engine-service was found. Call project_run first.")
   end
 
-  -- 3. Clear stale output, drop the trigger marker
-  os.remove(out_path)
-  local t = io.open(trigger, "w")
-  if not t then
-    return util.error_response("WRITE_ERROR",
-      "Could not write trigger file at " .. trigger ..
-      " — is the project directory writable?")
+  -- 2. Hit the /screenshot endpoint (added by britzl/defold-screenshot ext)
+  local resp = util.run_shell(
+    string.format("curl -s --max-time %d http://localhost:%d/screenshot",
+                  timeout_s, port)) or ""
+  if resp == "" then
+    return util.error_response("TIMEOUT",
+      "Engine service did not reply within " .. timeout_s ..
+      "s. The dmengine may be hung; check project_run logs.")
   end
-  t:write(tostring(os.time()))
-  t:close()
-
-  -- 4. Poll for output (100 ms steps). The helper writes the PNG and clears
-  --    the trigger when done.
-  local deadline = os.time() + timeout_s
-  while os.time() <= deadline do
-    util.run_shell("sleep 0.1")
-    if _file_exists(out_path) and not _file_exists(trigger) then
-      local size = _file_size(out_path) or 0
-      return {
-        ok = true, source = "game", path = out_path, size = size,
-        timeout = timeout_s,
-      }
-    end
+  if resp:find("404") or resp:find("Not Found") then
+    return util.error_response("EXTENSION_MISSING",
+      "/screenshot endpoint not found on the engine service. " ..
+      "Run editor_screenshot_install to add britzl/defold-screenshot " ..
+      "to game.project, then build + project_run again.",
+      { response_tail = resp:sub(1, 200) })
   end
 
-  -- Cleanup the marker so the next request starts fresh.
-  os.remove(trigger)
-  return util.error_response("TIMEOUT",
-    "Game helper did not produce a screenshot within " .. timeout_s ..
-    "s. Check that (a) the helper is in main.collection and (b) the project " ..
-    "has britzl/defold-screenshot in its dependencies + has been rebuilt.")
+  -- 3. Parse the JSON reply { "path": "/var/folders/.../screenshot-...png" }
+  local path = resp:match('"path"%s*:%s*"([^"]+)"')
+  if not path then
+    return util.error_response("INVALID_RESPONSE",
+      "Could not parse /screenshot reply",
+      { response = resp:sub(1, 300) })
+  end
+
+  -- 4. The extension writes to /var/folders/.../defold-screenshot/ which is
+  --    outside the project sandbox — io.open can't read it from the editor
+  --    script. Copy it into the project via /bin/sh so it's visible to
+  --    the editor and any tool downstream.
+  local final_path = out_path or ".defold_ai_capture.png"
+  -- Escape single quotes for safe shell substitution.
+  local src_esc = path:gsub("'", "'\\''")
+  local dst_esc = final_path:gsub("'", "'\\''")
+  local cp_out = util.run_shell("cp '" .. src_esc .. "' '" .. dst_esc .. "'") or ""
+  -- io.open works on project-relative paths.
+  local size = _file_size(final_path) or 0
+  if size == 0 then
+    -- Fallback: stat the source file via shell.
+    local stat_out = util.run_shell("stat -f %z '" .. src_esc .. "'") or ""
+    size = tonumber(stat_out:match("%d+")) or 0
+  end
+
+  return {
+    ok = true, source = "game", path = final_path,
+    source_path = path, size = size,
+    engine_service_port = port,
+  }
 end
 
 -- ---------------------------------------------------------- macOS capture ----
@@ -179,126 +205,45 @@ end
 
 -- ------------------------------------------------- screenshot_install -----
 --
--- One-shot setup: writes /defold_ai/helper.script, /defold_ai/helper.go and
--- adds the britzl/defold-screenshot dep to game.project if missing. Optionally
--- (auto_wire=true) appends the helper instance to bootstrap.main_collection
--- so it loads automatically on project_run.
-
-local _HELPER_SCRIPT = [[
--- Generated by defold-ai editor_screenshot_install.
--- Polls a trigger file written by the editor; when present, calls
--- screenshot.png() (britzl/defold-screenshot ext) and writes the PNG
--- bytes to a sibling output file. The editor handler then reads it back.
-
-local TRIGGER = ".defold_ai_capture_request"
-local OUTPUT  = ".defold_ai_capture.png"
-
-function init(self)
-    print("[defold-ai helper] active; polling for capture requests")
-    if screenshot == nil then
-        print("[defold-ai helper] WARNING: 'screenshot' module missing — " ..
-              "add britzl/defold-screenshot to game.project dependencies.")
-    end
-    self.busy = false
-end
-
-local function _attempt_capture(self)
-    if not screenshot then
-        os.remove(TRIGGER)
-        self.busy = false
-        return
-    end
-    screenshot.png(function(_, image_bytes, w, h)
-        local f = io.open(OUTPUT, "wb")
-        if f then
-            f:write(image_bytes)
-            f:close()
-            print(("[defold-ai helper] captured %dx%d (%d bytes)"):format(
-                w, h, #image_bytes))
-        else
-            print("[defold-ai helper] could not write " .. OUTPUT)
-        end
-        os.remove(TRIGGER)
-        self.busy = false
-    end)
-end
-
-function update(self, dt)
-    if self.busy then return end
-    local f = io.open(TRIGGER, "rb")
-    if not f then return end
-    f:close()
-    self.busy = true
-    _attempt_capture(self)
-end
-]]
-
-local _HELPER_GO = [[
-components {
-  id: "script"
-  component: "/defold_ai/helper.script"
-}
-]]
+-- One-shot setup: appends `britzl/defold-screenshot` to `[project]
+-- dependencies` in game.project. The extension self-registers a
+-- `/screenshot` HTTP endpoint on the engine service when the game runs —
+-- no game-side helper script needed.
+--
+-- After install:
+--   1. project_manage(op="build")  — bob runs `resolve build`
+--      automatically (game.project now has a dependency).
+--   2. project_run                 — the custom dmengine loads with the
+--      native ext baked in; /screenshot becomes available on port 8001.
+--   3. editor_screenshot(source="game") — returns a PNG path immediately.
 
 local _DEP_URL = "https://github.com/britzl/defold-screenshot/archive/master.zip"
 
 function M.screenshot_install(body)
   body = body or {}
-  local results = { ok = true, created = {}, edited = {} }
+  local results = { ok = true, edited = {} }
 
-  -- 1. /defold_ai/helper.script
-  local script_path = "defold_ai/helper.script"
-  if not _file_exists(script_path) then
-    editor.create_resources({ { "/" .. script_path, _HELPER_SCRIPT } })
-    table.insert(results.created, "/" .. script_path)
-  end
-
-  -- 2. /defold_ai/helper.go
-  local go_path = "defold_ai/helper.go"
-  if not _file_exists(go_path) then
-    editor.create_resources({ { "/" .. go_path, _HELPER_GO } })
-    table.insert(results.created, "/" .. go_path)
-  end
-
-  -- 3. game.project [project] dependencies
   local gp = util.read_file("game.project") or ""
-  if not gp:find(_DEP_URL, 1, true) then
-    if gp:find("\ndependencies") then
-      gp = gp:gsub("(\ndependencies%s*=%s*[^\n]*)", "%1," .. _DEP_URL, 1)
-    elseif gp:find("%[project%]") then
-      gp = gp:gsub("(%[project%][^%[]*)", "%1dependencies = " .. _DEP_URL .. "\n", 1)
-    else
-      gp = gp .. "\n[project]\ndependencies = " .. _DEP_URL .. "\n"
-    end
-    util.write_file("game.project", gp)
-    table.insert(results.edited, "game.project (+dependencies)")
-    results.dependency_added = _DEP_URL
-    results.note = "Open Defold > Project > Fetch Libraries to pull the extension, " ..
-                   "then project_run again to make the helper active."
+  if gp:find(_DEP_URL, 1, true) then
+    results.already_installed = true
+    results.note = "Dependency already in game.project. " ..
+                   "Run project_run to make /screenshot available."
+    return results
   end
 
-  -- 4. Optionally wire the helper into main.collection
-  if body.auto_wire then
-    local main_path = "main/main.collection"
-    local content = util.read_file(main_path)
-    if content and not content:find('prototype:%s*"/defold_ai/helper%.go"') then
-      if content:sub(-1) ~= "\n" then content = content .. "\n" end
-      content = content ..
-        'instances {\n' ..
-        '  id: "defold_ai_helper"\n' ..
-        '  prototype: "/defold_ai/helper.go"\n' ..
-        '  position { x: 0 y: 0 z: 0 }\n' ..
-        '  rotation { x: 0 y: 0 z: 0 w: 1 }\n' ..
-        '  scale3 { x: 1 y: 1 z: 1 }\n' ..
-        '}\n'
-      util.write_file(main_path, content)
-      table.insert(results.edited, "/" .. main_path .. " (+defold_ai_helper instance)")
-    end
+  if gp:find("\ndependencies") then
+    gp = gp:gsub("(\ndependencies%s*=%s*[^\n]*)", "%1," .. _DEP_URL, 1)
+  elseif gp:find("%[project%]") then
+    gp = gp:gsub("(%[project%][^%[]*)", "%1dependencies = " .. _DEP_URL .. "\n", 1)
   else
-    results.next_step = "Add an instance of /defold_ai/helper.go to your " ..
-      "main.collection (or pass auto_wire=true to have install do it for you)."
+    gp = gp .. "\n[project]\ndependencies = " .. _DEP_URL .. "\n"
   end
-
+  util.write_file("game.project", gp)
+  table.insert(results.edited, "game.project (+dependencies)")
+  results.dependency_added = _DEP_URL
+  results.note = "Dependency added. Run project_run (which triggers " ..
+                 "bob 'resolve build' automatically) and the /screenshot " ..
+                 "endpoint will be live on the engine service."
   return results
 end
 

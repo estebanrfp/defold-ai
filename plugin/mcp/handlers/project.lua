@@ -50,12 +50,20 @@ local function bob_build(variant)
   end
   local java = os.getenv("DEFOLD_AI_JAVA") or tc.java
   local jar  = os.getenv("DEFOLD_AI_BOB_JAR") or tc.bob_jar
-  log_line("info", "defold-ai", "build via bob: " .. java .. " ... --variant=" .. variant)
-  -- Pass args directly to editor.execute (no shell wrapping). This avoids
-  -- quoting bugs and lets editor.execute capture both stdout and stderr.
-  local output, ok = util.run_shell({
-    java, "-cp", jar, "com.dynamo.bob.Bob", "--variant=" .. variant, "build",
-  })
+  -- If game.project has `dependencies = ...`, we must run `resolve` before
+  -- `build` so bob downloads the dependency zips and exposes the native
+  -- extension code to the build pipeline. Cheap to include unconditionally,
+  -- but we skip when there are no deps to avoid network calls on every run.
+  local args = { java, "-cp", jar, "com.dynamo.bob.Bob", "--variant=" .. variant }
+  local gp = util.read_file("game.project") or ""
+  if gp:find("\ndependencies%s*=%s*[^\n%s]") then
+    table.insert(args, "resolve")
+  end
+  table.insert(args, "build")
+  log_line("info", "defold-ai", "build via bob: " .. java .. " ... " ..
+    (args[#args - 1] == "resolve" and "resolve build" or "build") ..
+    " --variant=" .. variant)
+  local output, ok = util.run_shell(args)
   local errors = extract_bob_errors(output or "")
   if not ok or #errors > 0 or (output and output:find("The build failed")) then
     return util.error_response("BUILD_ERROR", "Bob build failed", {
@@ -90,15 +98,44 @@ function M.run(body)
     return build_result
   end
 
-  -- Step 2: spawn dmengine in the background, redirecting output to log.txt
+  -- Step 2: pick the engine to spawn. Prefer the project-local custom build
+  -- (produced when game.project has native dependencies — bob downloads a
+  -- platform-specific dmengine from the extender service and drops it under
+  -- build/<arch>-<os>/dmengine). Fall back to the unpacked vanilla dmengine.
   local tc = util.find_defold_toolchain()
-  if not tc.dmengine then
+  local custom_engine
+  for _, candidate in ipairs({
+    "build/arm64-osx/dmengine",
+    "build/x86_64-osx/dmengine",
+    "build/arm64-macos/dmengine",
+    "build/x86_64-linux/dmengine",
+    "build/x86_64-win32/dmengine.exe",
+  }) do
+    local f = io.open(candidate, "rb")
+    if f then f:close(); custom_engine = candidate; break end
+  end
+  local engine = os.getenv("DEFOLD_AI_DMENGINE") or custom_engine or tc.dmengine
+  if not engine then
     return util.error_response("ENGINE_NOT_FOUND",
-      "Built OK, but could not locate dmengine binary to launch. " ..
+      "Built OK, but could not locate any dmengine binary to launch. " ..
       "Set DEFOLD_AI_DMENGINE env var to override.",
       { build_output_tail = build_result.output_tail })
   end
-  local engine = os.getenv("DEFOLD_AI_DMENGINE") or tc.dmengine
+  if custom_engine then
+    -- bob writes the custom engine without the executable bit set.
+    util.run_shell({ "chmod", "+x", custom_engine })
+    -- The shell that launches dmengine via `( ... & ) ; sleep 0.1` may not
+    -- resolve relative paths against our cwd reliably; expand to absolute.
+    local pwd_out = util.run_shell({ "pwd" }) or ""
+    local pwd = (pwd_out:gsub("%s+$", ""))
+    if pwd ~= "" and not custom_engine:match("^/") then
+      engine = pwd .. "/" .. custom_engine
+    else
+      engine = custom_engine
+    end
+    log_line("info", "defold-ai",
+      "using custom build engine (project has native deps): " .. engine)
+  end
   -- Launch detached: a sub-shell forks the engine then exits, so editor.execute
   -- returns immediately without waiting on dmengine.
   local launch_cmd = string.format(
