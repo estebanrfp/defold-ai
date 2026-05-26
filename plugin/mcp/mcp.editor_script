@@ -15,11 +15,12 @@ local util = require "mcp.lib.util"
 -- (which clears package.loaded) actually picks up handler edits.
 local TOOLS = {
   -- editor
-  ping                       = { inline = function(_) return { ok = true, version = "0.8.0" } end },
+  ping                       = { inline = function(_) return { ok = true, version = "0.12.0" } end },
   editor_state               = { module = "mcp.handlers.editor",        fn = "state" },
   editor_screenshot          = { module = "mcp.handlers.editor",        fn = "screenshot" },
   editor_manage              = { module = "mcp.handlers.editor",        fn = "manage" },
   editor_reload_plugin       = { module = "mcp.handlers.editor",        fn = "reload_plugin" },
+  editor_screenshot_install  = { module = "mcp.handlers.editor",        fn = "screenshot_install" },
 
   -- collection
   collection_manage          = { module = "mcp.handlers.collection",    fn = "manage" },
@@ -129,7 +130,7 @@ function M.get_http_server_routes()
     table.insert(routes, http.server.route("/mcp/" .. tool_name, "POST", "json", dispatch(tool_name)))
   end
   table.insert(routes, http.server.route("/mcp/ping", "GET", function(_)
-    return http.server.json_response({ ok = true, version = "0.8.0" })
+    return http.server.json_response({ ok = true, version = "0.12.0" })
   end))
   return routes
 end

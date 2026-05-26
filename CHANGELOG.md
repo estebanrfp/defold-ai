@@ -11,13 +11,65 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- A first-party engine-side capture endpoint via `game_helper.lua`
-  injection at `project_run` time.
 - `gameobject_manage(duplicate / rename / reparent)`.
 - `collection_manage(save_as / get_roots)`.
 - A reliable hot-reload path.
-- Linux / Windows paths for `find_defold_toolchain` + `editor_screenshot`.
+- Linux / Windows paths for `find_defold_toolchain` + `editor_screenshot(source="macos")`.
 - `examples/applegame` runnable demo.
+
+## [0.12.0] — 2026-05-27
+
+Game-side `editor_screenshot` lands. Cross-platform, no OS permissions.
+
+### Added
+
+- **`editor_screenshot_install`** — one-shot setup that:
+  - writes `/defold_ai/helper.script` (polls `.defold_ai_capture_request`
+    in the project root, calls `screenshot.png()` from the
+    [britzl/defold-screenshot](https://github.com/britzl/defold-screenshot)
+    extension, writes the PNG to `.defold_ai_capture.png`, clears the
+    trigger);
+  - writes `/defold_ai/helper.go` referencing that script;
+  - appends `britzl/defold-screenshot` to `[project] dependencies` in
+    `game.project` (idempotent — skipped if already present);
+  - optionally (`auto_wire=true`) appends an instance of
+    `/defold_ai/helper.go` to `/main/main.collection` so it loads on
+    `project_run`.
+
+  After install the user runs **Project > Fetch Libraries** in Defold
+  once (to pull the native extension), then `project_run` and the
+  game-side helper is live.
+
+- **`editor_screenshot(source="game")`** — file-based handshake between
+  editor and the running `dmengine`:
+  1. Drop a trigger marker at `.defold_ai_capture_request`.
+  2. Helper's `update()` notices, calls `screenshot.png()` async,
+     writes the PNG to `.defold_ai_capture.png`, removes the trigger.
+  3. Editor handler polls (100 ms steps, default 5 s timeout) for the
+     PNG, returns `{ok, source, path, size, timeout}`.
+
+  Cross-platform: macOS / Linux / Windows / iOS / Android / HTML5
+  (anywhere the screenshot extension runs). No OS permissions, no
+  `screencapture`, no JavaFX.
+
+- **`editor_screenshot(source="auto")`** — try `"game"` first; on
+  `SETUP_REQUIRED` / `ENGINE_NOT_RUNNING` / `TIMEOUT`, fall back to the
+  macOS `screencapture` path. Best default for "I don't care how, just
+  give me a PNG".
+
+### Changed
+
+- `editor_screenshot` `source` param now accepts `auto` / `game` /
+  `macos` / `editor`. `target` (old name) stays accepted as an alias
+  for backwards compat — `target="editor"` maps to `source="macos"`.
+
+### Notes
+
+This closes the long-standing gap that motivated v0.9-0.10's whole arc:
+the editor can now ask the running game for a screenshot directly,
+without depending on macOS Screen Recording permission. The helper
+itself is generated on demand and the dependency is a tiny native
+extension maintained by Björn Ritzl (one of the Defold core devs).
 
 ## [0.11.0] — 2026-05-27
 
@@ -462,7 +514,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/estebanrfp/defold-ai/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/estebanrfp/defold-ai/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/estebanrfp/defold-ai/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/estebanrfp/defold-ai/compare/v0.8.0...v0.9.0
