@@ -31,13 +31,33 @@ def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
 
     @mcp.tool()
     def material_manage(op: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Material resource ops.
+        """Material (.material) resource ops with curated presets.
 
         Ops:
-          • ``create``(path, vertex_program, fragment_program, vertex_constants,
-            fragment_constants, samplers): build a new .material
-          • ``set_constant``(path, name, value): set/override a constant
-          • ``get``(path): read a material's full definition
+          • ``create``(path, vertex_program?, fragment_program?):
+            Minimal create — wires VP/FP only (no constants/samplers).
+            Kept for back-compat; prefer ``create_full`` or ``apply_preset``.
+          • ``create_full``(path, vertex_program, fragment_program, name?,
+            tags=["model"], vertex_space?, vertex_constants=[], fragment_constants=[],
+            samplers=[], max_page_count=0):
+            Build a complete .material from structured input. Constants are
+            dicts ``{name, type?, value: {x, y, z, w}}``; samplers
+            ``{name, wrap_u?, wrap_v?, filter_min?, filter_mag?, max_anisotropy?}``.
+          • ``apply_preset``(path, preset, overrides={}):
+            Generate a ready-to-use .material from a curated library. Built-in
+            presets: ``model_lit_tint``, ``model_unlit_tint``, ``sky_gradient``
+            (auto-creates ``/assets/shaders/sky.{vp,fp}`` if missing),
+            ``gui_basic``, ``sprite_basic``, ``tilemap_basic``. The
+            ``overrides`` table is deep-merged into the preset blueprint, so
+            you can tweak just the tint or one constant without re-specifying.
+          • ``set_constant``(path, name, value, kind="fragment", type="CONSTANT_TYPE_USER"):
+            Edit a single constant in place. Replaces the block if present,
+            appends otherwise. ``value`` is a vec4 dict.
+          • ``get``(path):
+            Inspect a .material — returns name, tags, vp/fp, vertex_space,
+            vertex_constants, fragment_constants, samplers.
+          • ``list_presets``():
+            Enumerate available preset names.
         """
         return client.call("material_manage", {"op": op, "params": params or {}})
 

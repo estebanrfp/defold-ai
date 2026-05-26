@@ -11,24 +11,59 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- `render_manage(create)` — generate a `.render` + `.render_script` pair
-  from a small DSL.
-- `material_manage(create_full)` — accept structured `samplers`,
-  `vertex_constants`, `fragment_constants` (with `CONSTANT_TYPE_USER` +
-  initial vec4 values).
-- `material_manage(set_constant / get)` — runtime constant edits.
-- `material_manage(apply_preset)` — common materials (lit, unlit-tint,
-  sky-gradient) ported from godot-ai-style preset libraries.
-- `camera_manage` — abstraction over `camera` component + follow rigs.
+- `render_manage(create)` — generate `.render` + `.render_script` pair
+  from a small DSL (passes / cull / depth / blend per pass).
+- `camera_manage` — abstraction over `camera` component + follow rigs
+  (`follow_2d` / `follow_3d` orbital).
+- `editor_screenshot` — investigating the `dmengine` debug HTTP API.
 - `gameobject_manage(duplicate / rename / reparent)`.
 - `collection_manage(save_as / get_roots)`.
-- `editor_screenshot` — Defold editor API gap (engine `/screenshot` does
-  not exist; investigating a `dmengine`-side helper script).
 - A reliable hot-reload path (`editor_reload_plugin` invalidates
   `package.loaded` but Defold keeps a bytecode cache — workaround is a
   full editor restart).
 - Windows paths for `find_defold_toolchain`.
 - `examples/applegame` runnable demo.
+
+## [0.6.0] — 2026-05-26
+
+Ported the `material_manage` shape from `godot-ai` so users don't have
+to hand-write Defold's protobuf-text for every shader binding.
+
+### Added
+
+- **`material_manage(create_full)`** — build a `.material` from
+  structured input: `vertex_constants=[{name, type?, value}]`,
+  `fragment_constants=[...]`, `samplers=[{name, wrap_u?, wrap_v?,
+  filter_min?, filter_mag?, max_anisotropy?}]`, `tags=[]`,
+  `vertex_space?`, `max_page_count?`. Replaces the previous workflow of
+  calling `resource_manage(write)` with a hand-crafted protobuf-text
+  blob.
+- **`material_manage(apply_preset)`** — curated library:
+  `model_lit_tint`, `model_unlit_tint`, `sky_gradient` (auto-creates
+  `/assets/shaders/sky.{vp,fp}` if missing), `gui_basic`, `sprite_basic`,
+  `tilemap_basic`. The `overrides` dict deep-merges into the preset
+  blueprint, so tweaking just a tint or one constant is one short call.
+- **`material_manage(list_presets)`** — enumerate available preset names.
+- **`material_manage(set_constant)`** — edit a single constant in place
+  (`kind="fragment"|"vertex"`). Replaces the block if present, appends
+  otherwise. Removes the old `NOT_IMPLEMENTED` stub.
+- **`material_manage(get)`** — parse a `.material` and return structured
+  fields: name, tags, vertex/fragment programs, vertex_space, all
+  constants (with `{x, y, z, w}` values), sampler names. Removes the old
+  `NOT_IMPLEMENTED` stub.
+
+### Changed
+
+- `material_manage(create)` (the original minimal op) now also emits
+  `max_page_count: 0` so the resulting file is a valid `.material`
+  out-of-the-box. Marked as legacy in the docs — `create_full` /
+  `apply_preset` are the new entry points.
+
+### Docs
+
+- README now shows the official Defold logo as the hero image
+  (`docs/images/hero.webp`, 18 KB) — fixes the previous broken
+  `docs/images/hero.png` link.
 
 ## [0.5.0] — 2026-05-26
 
@@ -277,7 +312,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/estebanrfp/defold-ai/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/estebanrfp/defold-ai/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/estebanrfp/defold-ai/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/estebanrfp/defold-ai/compare/v0.2.0...v0.3.0

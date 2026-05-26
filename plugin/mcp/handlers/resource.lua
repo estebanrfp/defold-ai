@@ -55,26 +55,422 @@ function M.manage(body)
 end
 
 -- ============ Material ============
+--
+-- Defold .material is protobuf-text with this shape:
+--   name: "..."
+--   tags: "..."   (repeated)
+--   vertex_program: "..."
+--   fragment_program: "..."
+--   vertex_space: VERTEX_SPACE_WORLD | VERTEX_SPACE_LOCAL
+--   vertex_constants { name, type, value { x, y, z, w } }    (repeated)
+--   fragment_constants { name, type, value { x, y, z, w } }  (repeated)
+--   samplers { name, wrap_u, wrap_v, filter_min, filter_mag, max_anisotropy }
+--   max_page_count: N
+
+-- ---------- Tiny serializer for the structured create_full path ----------
+
+local function _v4(v, default)
+  v = v or default
+  return string.format("{ x: %s y: %s z: %s w: %s }",
+    tostring(v.x or v[1] or 0), tostring(v.y or v[2] or 0),
+    tostring(v.z or v[3] or 0), tostring(v.w or v[4] or 1))
+end
+
+local function _const_block(kind, c)
+  -- kind = "vertex_constants" | "fragment_constants"
+  -- c = { name, type? (default CONSTANT_TYPE_USER), value? (vec4) }
+  local t = c.type or "CONSTANT_TYPE_USER"
+  local v = _v4(c.value, { 0, 0, 0, 1 })
+  return string.format(
+    "%s {\n  name: \"%s\"\n  type: %s\n  value %s\n}\n",
+    kind, c.name, t, v
+  )
+end
+
+local function _sampler_block(s)
+  -- s = { name, wrap_u?, wrap_v?, filter_min?, filter_mag?, max_anisotropy? }
+  local lines = { "samplers {", '  name: "' .. s.name .. '"' }
+  table.insert(lines, "  wrap_u: " .. (s.wrap_u or "WRAP_MODE_CLAMP_TO_EDGE"))
+  table.insert(lines, "  wrap_v: " .. (s.wrap_v or "WRAP_MODE_CLAMP_TO_EDGE"))
+  table.insert(lines, "  filter_min: " .. (s.filter_min or "FILTER_MODE_MIN_LINEAR"))
+  table.insert(lines, "  filter_mag: " .. (s.filter_mag or "FILTER_MODE_MAG_LINEAR"))
+  table.insert(lines, "  max_anisotropy: " .. tostring(s.max_anisotropy or 1.0))
+  table.insert(lines, "}")
+  return table.concat(lines, "\n") .. "\n"
+end
+
+local function _render_material(spec)
+  -- spec = { name, vp, fp, tags=[], vertex_space?, vertex_constants=[],
+  --         fragment_constants=[], samplers=[], max_page_count? }
+  local out = {}
+  table.insert(out, string.format('name: "%s"', spec.name))
+  for _, tag in ipairs(spec.tags or {}) do
+    table.insert(out, string.format('tags: "%s"', tag))
+  end
+  table.insert(out, string.format('vertex_program: "%s"', spec.vp))
+  table.insert(out, string.format('fragment_program: "%s"', spec.fp))
+  if spec.vertex_space then
+    table.insert(out, "vertex_space: " .. spec.vertex_space)
+  end
+  local body = table.concat(out, "\n") .. "\n"
+  for _, c in ipairs(spec.vertex_constants or {}) do
+    body = body .. _const_block("vertex_constants", c)
+  end
+  for _, c in ipairs(spec.fragment_constants or {}) do
+    body = body .. _const_block("fragment_constants", c)
+  end
+  for _, s in ipairs(spec.samplers or {}) do
+    body = body .. _sampler_block(s)
+  end
+  body = body .. "max_page_count: " .. tostring(spec.max_page_count or 0) .. "\n"
+  return body
+end
+
+-- ---------- Curated presets (ported from godot-ai's material library) ----------
+
+-- Standard matrix-bind vertex constants for the builtin model shader.
+local _STD_MTX = {
+  { name = "mtx_worldview", type = "CONSTANT_TYPE_WORLDVIEW" },
+  { name = "mtx_view",      type = "CONSTANT_TYPE_VIEW" },
+  { name = "mtx_proj",      type = "CONSTANT_TYPE_PROJECTION" },
+  { name = "mtx_normal",    type = "CONSTANT_TYPE_NORMAL" },
+}
+
+-- The single tex0 sampler used by every preset that needs a texture.
+local _TEX0 = {
+  { name = "tex0",
+    wrap_u = "WRAP_MODE_REPEAT", wrap_v = "WRAP_MODE_REPEAT",
+    filter_min = "FILTER_MODE_MIN_LINEAR", filter_mag = "FILTER_MODE_MAG_LINEAR" },
+}
+
+local PRESETS = {
+  -- A lit, tintable model material based on the builtin model.vp/.fp pair.
+  -- Useful for voxel blocks, props and player rigs.
+  model_lit_tint = function()
+    return {
+      name = "model_lit_tint", tags = { "model" },
+      vp = "/builtins/materials/model.vp",
+      fp = "/builtins/materials/model.fp",
+      vertex_space = "VERTEX_SPACE_WORLD",
+      vertex_constants = {
+        _STD_MTX[1], _STD_MTX[2], _STD_MTX[3], _STD_MTX[4],
+        { name = "light", value = { 0.6, 1.0, 0.4, 1.0 } },
+      },
+      fragment_constants = {
+        { name = "tint", value = { 1, 1, 1, 1 } },
+      },
+      samplers = _TEX0,
+    }
+  end,
+
+  -- Same builtin shader but with the light direction set so it acts as a
+  -- top-down "noon" lighting. The fragment shader still multiplies tint, so
+  -- you can leave the white texture and just override the tint constant
+  -- per-instance via model.set_constant.
+  model_unlit_tint = function()
+    -- The builtin model.fp does run a diffuse term, so "unlit" here means
+    -- "very bright ambient" (clamps the diffuse term to ~white). For a true
+    -- unlit shader use the sprite material instead.
+    return {
+      name = "model_unlit_tint", tags = { "model" },
+      vp = "/builtins/materials/model.vp",
+      fp = "/builtins/materials/model.fp",
+      vertex_space = "VERTEX_SPACE_WORLD",
+      vertex_constants = {
+        _STD_MTX[1], _STD_MTX[2], _STD_MTX[3], _STD_MTX[4],
+        { name = "light", value = { 0, 1, 0, 1 } },
+      },
+      fragment_constants = {
+        { name = "tint", value = { 1, 1, 1, 1 } },
+      },
+      samplers = _TEX0,
+    }
+  end,
+
+  -- Sky-dome gradient. Assumes /assets/shaders/sky.{vp,fp} exist
+  -- (writes them if missing — see _ensure_sky_shaders).
+  sky_gradient = function()
+    return {
+      name = "sky_gradient", tags = { "sky" },
+      vp = "/assets/shaders/sky.vp",
+      fp = "/assets/shaders/sky.fp",
+      vertex_space = "VERTEX_SPACE_LOCAL",
+      vertex_constants = {
+        { name = "mtx_worldview", type = "CONSTANT_TYPE_WORLDVIEW" },
+        { name = "mtx_proj",      type = "CONSTANT_TYPE_PROJECTION" },
+      },
+      fragment_constants = {
+        { name = "top_color",     value = { 0.38, 0.55, 0.85, 1 } },
+        { name = "horizon_color", value = { 0.78, 0.85, 0.92, 1 } },
+        { name = "bottom_color", value = { 0.18, 0.18, 0.22, 1 } },
+      },
+    }
+  end,
+
+  -- Alias to the GUI builtin.
+  gui_basic = function()
+    return {
+      _passthrough = "/builtins/materials/gui.material",
+      name = "gui_basic",
+    }
+  end,
+
+  -- Alias to the sprite builtin.
+  sprite_basic = function()
+    return {
+      _passthrough = "/builtins/materials/sprite.material",
+      name = "sprite_basic",
+    }
+  end,
+
+  -- Alias to the tilemap builtin.
+  tilemap_basic = function()
+    return {
+      _passthrough = "/builtins/materials/tile_map.material",
+      name = "tilemap_basic",
+    }
+  end,
+}
+
+local function _ensure_sky_shaders()
+  -- Write the sky shader pair if either file is missing. Self-contained so
+  -- callers don't have to remember to bootstrap.
+  local vp_path = "/assets/shaders/sky.vp"
+  local fp_path = "/assets/shaders/sky.fp"
+  if not util.read_file(vp_path) then
+    editor.create_resources({ { vp_path,
+      "#version 140\n\n" ..
+      "in highp vec4 position;\n" ..
+      "out highp vec3 var_local_pos;\n\n" ..
+      "uniform vs_uniforms {\n" ..
+      "    mediump mat4 mtx_worldview;\n" ..
+      "    mediump mat4 mtx_proj;\n" ..
+      "};\n\n" ..
+      "void main() {\n" ..
+      "    var_local_pos = position.xyz;\n" ..
+      "    gl_Position = mtx_proj * mtx_worldview * vec4(position.xyz, 1.0);\n" ..
+      "}\n" } })
+  end
+  if not util.read_file(fp_path) then
+    editor.create_resources({ { fp_path,
+      "#version 140\n\n" ..
+      "in highp vec3 var_local_pos;\n" ..
+      "out vec4 out_fragColor;\n\n" ..
+      "uniform fs_uniforms {\n" ..
+      "    mediump vec4 top_color;\n" ..
+      "    mediump vec4 horizon_color;\n" ..
+      "    mediump vec4 bottom_color;\n" ..
+      "};\n\n" ..
+      "void main() {\n" ..
+      "    vec3 dir = normalize(var_local_pos);\n" ..
+      "    float t = dir.y;\n" ..
+      "    vec3 col;\n" ..
+      "    if (t > 0.0) {\n" ..
+      "        col = mix(horizon_color.rgb, top_color.rgb, pow(t, 0.7));\n" ..
+      "    } else {\n" ..
+      "        col = mix(horizon_color.rgb, bottom_color.rgb, -t);\n" ..
+      "    }\n" ..
+      "    out_fragColor = vec4(col, 1.0);\n" ..
+      "}\n" } })
+  end
+end
+
+-- Merge `overrides` into the preset blueprint. Tables go deep; scalars replace.
+local function _merge(base, overrides)
+  if type(overrides) ~= "table" then return base end
+  for k, v in pairs(overrides) do
+    if type(v) == "table" and type(base[k]) == "table" then
+      base[k] = _merge(base[k], v)
+    else
+      base[k] = v
+    end
+  end
+  return base
+end
+
+-- ---------- find/replace helper for set_constant ----------
+
+local function _find_constant_block(content, kind, name)
+  -- Returns (start, end) of a `<kind> { ... name: "<name>" ... }` block.
+  local i = 1
+  while true do
+    local s = content:find(kind .. "%s*{", i)
+    if not s then return nil end
+    local depth, j = 0, s
+    while j <= #content do
+      local ch = content:sub(j, j)
+      if ch == "{" then depth = depth + 1
+      elseif ch == "}" then
+        depth = depth - 1
+        if depth == 0 then break end
+      end
+      j = j + 1
+    end
+    local block = content:sub(s, j)
+    if block:match('name:%s*"' .. name .. '"') then
+      return s, j
+    end
+    i = j + 1
+  end
+end
+
+-- ---------- Public op ----------
+
 function M.material_manage(body)
   local op = body.op or ""
   local params = body.params or {}
-  if op == "create" then
+
+  if op == "list_presets" then
+    local names = {}
+    for k, _ in pairs(PRESETS) do table.insert(names, k) end
+    table.sort(names)
+    return { ok = true, presets = names }
+
+  elseif op == "create" then
+    -- Legacy minimal create (kept for back-compat). Use create_full for real
+    -- constants/samplers/tags.
     local path = util.norm_resource_path(params.path or "")
-    if path == "" then
-      return util.error_response("MISSING_PARAM", "create needs path")
-    end
+    if path == "" then return util.error_response("MISSING_PARAM", "create needs path") end
     local vp = params.vertex_program or "/builtins/materials/model.vp"
     local fp = params.fragment_program or "/builtins/materials/model.fp"
     local content = string.format(
-      "name: \"%s\"\nvertex_program: \"%s\"\nfragment_program: \"%s\"\n",
+      "name: \"%s\"\nvertex_program: \"%s\"\nfragment_program: \"%s\"\nmax_page_count: 0\n",
       path:match("([^/]+)%.material$") or "material", vp, fp
     )
     editor.create_resources({ { path, content } })
-    return { ok = true, path = path }
-  elseif op == "set_constant" or op == "get" then
-    return util.error_response("NOT_IMPLEMENTED",
-      op .. " requires structured .material edit; planned for v0.3. " ..
-      "Workaround: use resource_manage(op='read'/'write') to edit the .material text directly.")
+    return { ok = true, path = path, mode = "minimal" }
+
+  elseif op == "create_full" then
+    local path = util.norm_resource_path(params.path or "")
+    if path == "" then return util.error_response("MISSING_PARAM", "create_full needs path") end
+    if not params.vertex_program or not params.fragment_program then
+      return util.error_response("MISSING_PARAM",
+        "create_full needs vertex_program + fragment_program")
+    end
+    local spec = {
+      name = params.name or path:match("([^/]+)%.material$") or "material",
+      tags = params.tags or { "model" },
+      vp = util.norm_resource_path(params.vertex_program),
+      fp = util.norm_resource_path(params.fragment_program),
+      vertex_space = params.vertex_space,
+      vertex_constants = params.vertex_constants or {},
+      fragment_constants = params.fragment_constants or {},
+      samplers = params.samplers or {},
+      max_page_count = params.max_page_count or 0,
+    }
+    local content = _render_material(spec)
+    editor.create_resources({ { path, content } })
+    return { ok = true, path = path, mode = "full", size = #content }
+
+  elseif op == "apply_preset" then
+    local path = util.norm_resource_path(params.path or "")
+    local preset_name = params.preset or ""
+    if path == "" or preset_name == "" then
+      return util.error_response("MISSING_PARAM", "apply_preset needs path + preset")
+    end
+    local builder = PRESETS[preset_name]
+    if not builder then
+      local names = {}
+      for k, _ in pairs(PRESETS) do table.insert(names, k) end
+      return util.error_response("UNKNOWN_PRESET",
+        "preset '" .. preset_name .. "' not found. Available: " .. table.concat(names, ", "))
+    end
+    local spec = _merge(builder(), params.overrides or {})
+    -- Passthrough presets: write a tiny .material that just imports the
+    -- builtin. Caller can override `name` / `tags` for clarity.
+    if spec._passthrough then
+      local content = string.format(
+        'name: "%s"\nvertex_program: "%s.vp"\nfragment_program: "%s.fp"\nmax_page_count: 0\n',
+        spec.name,
+        spec._passthrough:gsub("%.material$", ""),
+        spec._passthrough:gsub("%.material$", "")
+      )
+      editor.create_resources({ { path, content } })
+      return { ok = true, path = path, preset = preset_name, mode = "passthrough" }
+    end
+    -- Some presets need accompanying shader files; ensure they exist first.
+    if preset_name == "sky_gradient" then _ensure_sky_shaders() end
+    local content = _render_material(spec)
+    editor.create_resources({ { path, content } })
+    return { ok = true, path = path, preset = preset_name }
+
+  elseif op == "set_constant" then
+    -- Edit a single constant in an existing .material.
+    -- params: path, name, value ({x,y,z,w}), kind ("fragment"|"vertex", default "fragment").
+    local path = util.norm_resource_path(params.path or "")
+    local name = params.name or ""
+    if path == "" or name == "" then
+      return util.error_response("MISSING_PARAM", "set_constant needs path + name")
+    end
+    local content, err = util.read_file(path)
+    if not content then return util.error_response("READ_ERROR", err) end
+    local kind = (params.kind == "vertex") and "vertex_constants" or "fragment_constants"
+    local s, e = _find_constant_block(content, kind, name)
+    if not s then
+      -- Append as a new block at the end.
+      content = content .. "\n" .. _const_block(kind, {
+        name = name, type = params.type or "CONSTANT_TYPE_USER",
+        value = params.value or { 0, 0, 0, 1 },
+      })
+    else
+      -- Replace the existing block.
+      local replacement = _const_block(kind, {
+        name = name, type = params.type or "CONSTANT_TYPE_USER",
+        value = params.value or { 0, 0, 0, 1 },
+      }):gsub("\n$", "")
+      content = content:sub(1, s - 1) .. replacement .. content:sub(e + 1)
+    end
+    local ok, werr = util.write_file(path, content)
+    if not ok then return util.error_response("WRITE_ERROR", werr) end
+    return { ok = true, path = path, name = name, kind = kind, value = params.value }
+
+  elseif op == "get" then
+    local path = util.norm_resource_path(params.path or "")
+    if path == "" then return util.error_response("MISSING_PARAM", "get needs path") end
+    local content, err = util.read_file(path)
+    if not content then return util.error_response("READ_ERROR", err) end
+    local function find_blocks(kind)
+      local out, i = {}, 1
+      while true do
+        local s = content:find(kind .. "%s*{", i)
+        if not s then break end
+        local depth, j = 0, s
+        while j <= #content do
+          local ch = content:sub(j, j)
+          if ch == "{" then depth = depth + 1
+          elseif ch == "}" then depth = depth - 1; if depth == 0 then break end end
+          j = j + 1
+        end
+        local block = content:sub(s, j)
+        local name = block:match('name:%s*"([^"]+)"')
+        local x = tonumber(block:match("x:%s*(%-?%d*%.?%d+)"))
+        local y = tonumber(block:match("y:%s*(%-?%d*%.?%d+)"))
+        local z = tonumber(block:match("z:%s*(%-?%d*%.?%d+)"))
+        local w = tonumber(block:match("w:%s*(%-?%d*%.?%d+)"))
+        if name then
+          table.insert(out, { name = name, value = { x = x, y = y, z = z, w = w } })
+        end
+        i = j + 1
+      end
+      return out
+    end
+    local tags = {}
+    for t in content:gmatch('tags:%s*"([^"]+)"') do table.insert(tags, t) end
+    local samplers = {}
+    for n in content:gmatch('samplers%s*{%s*name:%s*"([^"]+)"') do
+      table.insert(samplers, n)
+    end
+    return {
+      ok = true, path = path,
+      name = content:match('name:%s*"([^"]+)"'),
+      tags = tags,
+      vertex_program = content:match('vertex_program:%s*"([^"]+)"'),
+      fragment_program = content:match('fragment_program:%s*"([^"]+)"'),
+      vertex_space = content:match("vertex_space:%s*([%w_]+)"),
+      vertex_constants = find_blocks("vertex_constants"),
+      fragment_constants = find_blocks("fragment_constants"),
+      samplers = samplers,
+    }
   end
   return util.error_response("UNKNOWN_OP", "Unknown material_manage op: " .. op)
 end
