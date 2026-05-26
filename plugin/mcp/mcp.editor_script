@@ -15,7 +15,7 @@ local util = require "mcp.lib.util"
 -- (which clears package.loaded) actually picks up handler edits.
 local TOOLS = {
   -- editor
-  ping                       = { inline = function(_) return { ok = true, version = "0.7.0" } end },
+  ping                       = { inline = function(_) return { ok = true, version = "0.8.0" } end },
   editor_state               = { module = "mcp.handlers.editor",        fn = "state" },
   editor_screenshot          = { module = "mcp.handlers.editor",        fn = "screenshot" },
   editor_manage              = { module = "mcp.handlers.editor",        fn = "manage" },
@@ -52,6 +52,7 @@ local TOOLS = {
   tilesource_manage          = { module = "mcp.handlers.resource",      fn = "tilesource_manage" },
   tilemap_manage             = { module = "mcp.handlers.resource",      fn = "tilemap_manage" },
   render_manage              = { module = "mcp.handlers.render",        fn = "manage" },
+  camera_manage              = { module = "mcp.handlers.camera",        fn = "manage" },
 
   -- filesystem
   filesystem_manage          = { module = "mcp.handlers.filesystem",    fn = "manage" },
@@ -128,7 +129,7 @@ function M.get_http_server_routes()
     table.insert(routes, http.server.route("/mcp/" .. tool_name, "POST", "json", dispatch(tool_name)))
   end
   table.insert(routes, http.server.route("/mcp/ping", "GET", function(_)
-    return http.server.json_response({ ok = true, version = "0.7.0" })
+    return http.server.json_response({ ok = true, version = "0.8.0" })
   end))
   return routes
 end
@@ -156,7 +157,7 @@ function M.get_commands()
 end
 
 -- ============ Boot announce ============
-print("[defold-ai] editor script loaded — " .. util.count_tools(TOOLS) .. " tools registered (v0.7.0)")
+print("[defold-ai] editor script loaded — " .. util.count_tools(TOOLS) .. " tools registered (v0.8.0)")
 print("[defold-ai] HTTP server at " .. http.server.url)
 local ok, err = pcall(util.write_url_file, http.server.url)
 if not ok then

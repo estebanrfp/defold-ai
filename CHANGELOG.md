@@ -11,16 +11,47 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- `camera_manage` — abstraction over `camera` component + follow rigs
-  (`follow_2d` / `follow_3d` orbital).
 - `editor_screenshot` — investigating the `dmengine` debug HTTP API.
+- `node_find` / `collection_get_hierarchy` paginated reads with name/type
+  filters (port of godot-ai's pagination helpers).
 - `gameobject_manage(duplicate / rename / reparent)`.
 - `collection_manage(save_as / get_roots)`.
-- A reliable hot-reload path (`editor_reload_plugin` invalidates
-  `package.loaded` but Defold keeps a bytecode cache — workaround is a
-  full editor restart).
+- A reliable hot-reload path.
 - Windows paths for `find_defold_toolchain`.
 - `examples/applegame` runnable demo.
+
+## [0.8.0] — 2026-05-27
+
+Wraps Defold's camera component + the two follow rigs every project
+re-implements by hand.
+
+### Added
+
+- **`camera_manage(create)`** — generate a bare camera `.go` with one
+  embedded camera component. Accepts the usual `fov` / `near_z` / `far_z`
+  / `orthographic` / `orthographic_zoom` / `auto_aspect_ratio` opts.
+- **`camera_manage(apply_preset)`** — generate camera `.go` *and* the
+  matching follow `.script` in one call. Presets:
+    - `perspective_basic` / `orthographic_basic` — bare camera, no
+      script.
+    - `follow_3d` — third-person orbital. The generated script handles
+      mouse-driven yaw/pitch + back/up offset. Parent the camera GO
+      under your target instance so position follows automatically.
+      Exposes `spring_len`, `height_offset`, `pitch_min/max` as
+      `go.property` so they're tunable from collection overrides.
+    - `follow_2d` — 2D camera that smoothly lerps to a `target` URL each
+      frame. Exposes `target` (default `"/player"`) and `lerp`.
+  The `camera` dict overrides the camera component opts (fov, far_z,
+  etc.) on top of preset defaults.
+- **`camera_manage(list_presets)`** — enumerate presets with one-line
+  descriptions.
+
+### Notes
+
+- Defold's camera lives as a *component* inside a GO; the render script
+  binds it via `camera.get_cameras()`. `camera_manage` always produces
+  the GO + component pair so callers don't have to remember to wire it
+  up by hand.
 
 ## [0.7.0] — 2026-05-27
 
@@ -347,7 +378,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/estebanrfp/defold-ai/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/estebanrfp/defold-ai/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/estebanrfp/defold-ai/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/estebanrfp/defold-ai/compare/v0.4.0...v0.5.0

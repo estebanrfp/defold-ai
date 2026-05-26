@@ -6,6 +6,7 @@ from fastmcp import FastMCP
 
 from defold_ai.client import DefoldEditorClient
 from defold_ai.tools import (
+    camera,
     collection,
     component,
     editor,
@@ -39,4 +40,5 @@ def build_server() -> FastMCP:
     filesystem.register(mcp, client)
     input_binding.register(mcp, client)
     project.register(mcp, client)
+    camera.register(mcp, client)
     return mcp
