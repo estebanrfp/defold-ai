@@ -11,15 +11,51 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- `editor_screenshot` — still gated by macOS Screen Recording permission
-  and Defold has no first-party engine-side capture endpoint. Looking at
-  injecting a `game_helper.lua` at project_run time that exposes a
-  capture endpoint, similar to godot-ai's runtime helper.
+- A first-party Defold-engine-side capture endpoint (planned: inject a
+  `game_helper.lua` at `project_run` time, similar to godot-ai's runtime
+  helper). The current OS-shell approach needs macOS Screen Recording
+  permission — works once granted, but the helper approach would
+  bypass that entirely.
 - `gameobject_manage(duplicate / rename / reparent)`.
 - `collection_manage(save_as / get_roots)`.
 - A reliable hot-reload path.
-- Windows paths for `find_defold_toolchain`.
+- Linux / Windows paths for `find_defold_toolchain` + `editor_screenshot`.
 - `examples/applegame` runnable demo.
+
+## [0.10.0] — 2026-05-27
+
+`editor_screenshot` ships — implemented via macOS `screencapture` with
+honest error reporting when permissions are missing.
+
+### Added
+
+- **`editor_screenshot`** (no longer `NOT_IMPLEMENTED`):
+    - ``target = "game" | "editor"``: which window to capture.
+    - ``path``: where to write the PNG (default
+      `/tmp/defold_ai_screenshot.png`).
+    - Two capture modes, fallback automatically:
+      1. **window** — discover the target window-id via `osascript`
+         (`System Events`), capture just that window. Needs Accessibility
+         permission for the shell.
+      2. **full_screen** — fallback if osascript can't reach
+         System Events. Captures the whole display.
+    - Both modes need macOS **Screen Recording** permission for whatever
+      process spawned the editor (Terminal / iTerm / Claude Code / ...).
+      When the permission is missing, `screencapture` silently writes no
+      file; the handler detects the absence and returns a structured
+      `SCREENSHOT_DENIED` error with the exact System Settings path to
+      fix it.
+    - Returns `{ok, target, mode, path, size, process, window_id?}` on
+      success.
+
+### Notes
+
+- Linux & Windows paths are stubbed — they fall back to the same shell
+  approach but only macOS's `screencapture` is wired up. The handler
+  fails cleanly on other OSes.
+- A future iteration will inject a `game_helper.lua` that captures the
+  render target from inside the running game — eliminating the OS
+  permission dependency. Tracked under [Unreleased] above.
 
 ## [0.9.0] — 2026-05-27
 
@@ -405,7 +441,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/estebanrfp/defold-ai/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/estebanrfp/defold-ai/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/estebanrfp/defold-ai/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/estebanrfp/defold-ai/compare/v0.6.0...v0.7.0

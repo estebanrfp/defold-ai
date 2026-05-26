@@ -17,15 +17,79 @@ function M.state(body)
   }
 end
 
+-- Best-effort screenshot of either the editor window or the running game
+-- window. Defold has no editor-side capture API (as of 1.12.x); we shell out
+-- to the host OS instead.
+--
+-- macOS: uses `screencapture`; needs Screen Recording permission for Terminal
+--   (or whatever process owns the editor-script HTTP server). When permission
+--   is missing the OS silently writes no file and `screencapture` exits 0 —
+--   we detect the absence and return SCREENSHOT_DENIED with a clear path to
+--   grant permission.
+-- Linux / Windows: not yet implemented.
+--
+-- params:
+--   target: "game" (default — uses dmengine window) | "editor"
+--   path:   absolute path to write the PNG (default: /tmp/defold_ai_screenshot.png)
 function M.screenshot(body)
-  -- Defold doesn't expose a programmatic editor screenshot API yet (as of 1.10.x).
-  -- For now we return a stub indicating the feature is pending.
-  -- Workaround: take a screenshot of the running game via OS clipboard.
-  return util.error_response(
-    "NOT_IMPLEMENTED",
-    "editor_screenshot is not yet supported by Defold's editor scripting API. " ..
-    "Build & run the project, then take a screenshot of the game window manually."
-  )
+  body = body or {}
+  local target = body.target or "game"
+  local out_path = body.path or "/tmp/defold_ai_screenshot.png"
+  local proc = (target == "editor") and "Defold" or "dmengine"
+
+  -- Best-effort: clear any stale output so we can detect a silent failure.
+  os.remove(out_path)
+
+  -- macOS path: try window-targeted capture first, fall back to full screen.
+  -- Either approach requires Screen Recording permission for whatever process
+  -- spawned the editor — usually Terminal, iTerm, or your MCP client.
+  local discover_cmd = string.format(
+    [[osascript -e 'tell application "System Events"
+       set procs to (every process whose name contains "%s")
+       if procs is {} then return ""
+       set the_proc to item 1 of procs
+       tell the_proc
+         if (count of windows) is 0 then return ""
+         return id of first window
+       end tell
+     end tell' 2>/dev/null]],
+    proc)
+  local id_out = util.run_shell(discover_cmd) or ""
+  local window_id = id_out:gsub("%s+$", "")
+  local mode = "window"
+  local cap_cmd
+  if window_id ~= "" then
+    cap_cmd = "screencapture -l " .. window_id .. " -x -t png '" .. out_path .. "' 2>&1"
+  else
+    -- Either osascript can't see the window or the user hasn't approved
+    -- accessibility for the shell. Fall back to full-screen capture; it'll
+    -- still need Screen Recording permission, but doesn't need Accessibility.
+    mode = "full_screen"
+    cap_cmd = "screencapture -x -t png '" .. out_path .. "' 2>&1"
+  end
+  local cap_out = util.run_shell(cap_cmd) or ""
+  local f = io.open(out_path, "rb")
+  if not f then
+    -- macOS silently exits 0 on permission denial; the absence of a file is
+    -- the only reliable signal. Surface an actionable error.
+    return util.error_response("SCREENSHOT_DENIED",
+      "screencapture wrote no file. macOS blocked the call. Grant Screen " ..
+      "Recording permission to whatever process spawned the editor (usually " ..
+      "Terminal / iTerm / your MCP client) under System Settings > Privacy & " ..
+      "Security > Screen Recording, then restart that process.",
+      {
+        target = target, mode = mode, window_id = window_id,
+        screencapture_output = cap_out,
+        host_os = util.detect_os and util.detect_os() or "darwin",
+      })
+  end
+  local size = f:seek("end") or 0
+  f:close()
+  return {
+    ok = true, target = target, mode = mode, path = out_path,
+    window_id = (window_id ~= "" and window_id or nil),
+    size = size, process = proc,
+  }
 end
 
 function M.manage(body)
