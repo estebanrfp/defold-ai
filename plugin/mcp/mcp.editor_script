@@ -1,0 +1,151 @@
+-- defold-ai bridge editor script.
+-- Registers HTTP routes /mcp/<tool> for the Python MCP server to call.
+--
+-- Reload after editing: in the Defold editor menu Project > Reload Editor Scripts,
+-- or via the editor_reload_plugin MCP tool.
+
+local M = {}
+
+-- ============ require handlers ============
+local h_editor       = require "mcp.handlers.editor"
+local h_collection   = require "mcp.handlers.collection"
+local h_gameobject   = require "mcp.handlers.gameobject"
+local h_component    = require "mcp.handlers.component"
+local h_script       = require "mcp.handlers.script"
+local h_resource     = require "mcp.handlers.resource"
+local h_filesystem   = require "mcp.handlers.filesystem"
+local h_input        = require "mcp.handlers.input_binding"
+local h_project      = require "mcp.handlers.project"
+
+local util           = require "mcp.lib.util"
+
+-- ============ tool routing table ============
+-- Maps tool name to a function (request_body) -> response_table.
+local TOOLS = {
+  -- editor
+  ["ping"]                     = function(body) return { ok = true, version = "0.1.0" } end,
+  ["editor_state"]             = h_editor.state,
+  ["editor_screenshot"]        = h_editor.screenshot,
+  ["editor_manage"]            = h_editor.manage,
+  ["editor_reload_plugin"]     = h_editor.reload_plugin,
+
+  -- collection
+  ["collection_manage"]        = h_collection.manage,
+  ["collection_get_hierarchy"] = h_collection.get_hierarchy,
+  ["collection_open"]          = h_collection.open,
+  ["collection_save"]          = h_collection.save,
+
+  -- gameobject
+  ["gameobject_create"]        = h_gameobject.create,
+  ["gameobject_set_property"]  = h_gameobject.set_property,
+  ["gameobject_get_properties"]= h_gameobject.get_properties,
+  ["gameobject_find"]          = h_gameobject.find,
+  ["gameobject_manage"]        = h_gameobject.manage,
+
+  -- component
+  ["component_add"]            = h_component.add,
+  ["component_remove"]         = h_component.remove,
+
+  -- script
+  ["script_create"]            = h_script.create,
+  ["script_attach"]            = h_script.attach,
+  ["script_patch"]             = h_script.patch,
+  ["script_manage"]            = h_script.manage,
+
+  -- resource
+  ["resource_manage"]          = h_resource.manage,
+  ["material_manage"]          = h_resource.material_manage,
+  ["particlefx_manage"]        = h_resource.particlefx_manage,
+  ["atlas_manage"]             = h_resource.atlas_manage,
+
+  -- filesystem
+  ["filesystem_manage"]        = h_filesystem.manage,
+
+  -- input
+  ["input_binding_manage"]     = h_input.manage,
+
+  -- project
+  ["project_run"]              = h_project.run,
+  ["project_manage"]           = h_project.manage,
+  ["logs_read"]                = h_project.logs_read,
+  ["batch_execute"]            = h_project.batch_execute,
+}
+
+-- ============ HTTP route handler ============
+local function dispatch(tool_name)
+  return function(request)
+    local body = request.body or {}
+    local handler = TOOLS[tool_name]
+    if handler == nil then
+      return http.server.json_response({
+        ok = false,
+        error = "UNKNOWN_TOOL",
+        message = "No handler for tool: " .. tool_name,
+      }, 404)
+    end
+    -- Wrap handler call to catch Lua errors and report them structurally
+    local ok, result_or_err = pcall(handler, body)
+    if not ok then
+      print("[defold-ai] handler error in " .. tool_name .. ": " .. tostring(result_or_err))
+      return http.server.json_response({
+        ok = false,
+        error = "HANDLER_ERROR",
+        message = tostring(result_or_err),
+        tool = tool_name,
+      }, 500)
+    end
+    if type(result_or_err) ~= "table" then
+      result_or_err = { value = result_or_err }
+    end
+    if result_or_err.ok == nil then
+      result_or_err.ok = true
+    end
+    return http.server.json_response(result_or_err)
+  end
+end
+
+-- ============ Route registration ============
+function M.get_http_server_routes()
+  local routes = {}
+  for tool_name, _ in pairs(TOOLS) do
+    table.insert(routes, http.server.route("/mcp/" .. tool_name, "POST", "json", dispatch(tool_name)))
+  end
+  -- Convenience GET /mcp/ping for browser/curl sanity checks
+  table.insert(routes, http.server.route("/mcp/ping", "GET", function(_)
+    return http.server.json_response({ ok = true, version = "0.1.0" })
+  end))
+  return routes
+end
+
+-- ============ Optional commands menu ============
+function M.get_commands()
+  return {
+    {
+      label = "defold-ai: Print HTTP URL",
+      locations = { "Edit" },
+      run = function()
+        print("[defold-ai] HTTP URL: " .. http.server.url)
+        print("[defold-ai] Set DEFOLD_AI_URL=" .. http.server.url .. " for the MCP server")
+      end,
+    },
+    {
+      label = "defold-ai: Refresh ~/.defold_ai_url",
+      locations = { "Edit" },
+      run = function()
+        util.write_url_file(http.server.url)
+        print("[defold-ai] Wrote " .. http.server.url .. " to ~/.defold_ai_url")
+      end,
+    },
+  }
+end
+
+-- ============ Boot announce ============
+print("[defold-ai] editor script loaded — " .. util.count_tools(TOOLS) .. " tools registered")
+print("[defold-ai] HTTP server at " .. http.server.url)
+-- Best-effort: persist URL for the Python server to discover
+local ok, err = pcall(util.write_url_file, http.server.url)
+if not ok then
+  print("[defold-ai] could not write ~/.defold_ai_url: " .. tostring(err))
+end
+
+return M

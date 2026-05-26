@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv
+.python-version
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Defold runtime artifacts (in test/example projects)
+.editor_settings
+build/
+dist/
+*.dmengine
+*.darc
+
+# Logs
+*.log
+defold_ai.log
+
+# Local config
+.env
+*.local

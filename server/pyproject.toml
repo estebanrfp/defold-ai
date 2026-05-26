@@ -1,0 +1,39 @@
+[project]
+name = "defold-ai"
+version = "0.1.0"
+description = "MCP server for the Defold game engine — editor automation via the Model Context Protocol"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Esteban Fuster Pozzi", email = "estebanrfp@gmail.com" }]
+keywords = ["defold", "mcp", "model-context-protocol", "ai", "game-development"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "fastmcp>=0.2.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+defold-ai = "defold_ai.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/estebanrfp/defold-ai"
+Issues = "https://github.com/estebanrfp/defold-ai/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/defold_ai"]
