@@ -1,81 +1,93 @@
 -- defold-ai bridge editor script.
 -- Registers HTTP routes /mcp/<tool> for the Python MCP server to call.
 --
--- Reload after editing: in the Defold editor menu Project > Reload Editor Scripts,
--- or via the editor_reload_plugin MCP tool.
+-- Reload: editor_reload_plugin invalidates the require-cache so handler edits
+-- become live without restarting Defold. Restart is only needed when this
+-- entry-point file itself is edited (routes table).
 
 local M = {}
 
--- ============ require handlers ============
-local h_editor       = require "mcp.handlers.editor"
-local h_collection   = require "mcp.handlers.collection"
-local h_gameobject   = require "mcp.handlers.gameobject"
-local h_component    = require "mcp.handlers.component"
-local h_script       = require "mcp.handlers.script"
-local h_resource     = require "mcp.handlers.resource"
-local h_filesystem   = require "mcp.handlers.filesystem"
-local h_input        = require "mcp.handlers.input_binding"
-local h_project      = require "mcp.handlers.project"
+local util = require "mcp.lib.util"
 
-local util           = require "mcp.lib.util"
-
--- ============ tool routing table ============
--- Maps tool name to a function (request_body) -> response_table.
+-- ============ tool registry ============
+-- Each entry: { module = "mcp.handlers.X", fn = "function_name" }.
+-- We resolve module + function lazily on every request so editor_reload_plugin
+-- (which clears package.loaded) actually picks up handler edits.
 local TOOLS = {
   -- editor
-  ["ping"]                     = function(body) return { ok = true, version = "0.1.0" } end,
-  ["editor_state"]             = h_editor.state,
-  ["editor_screenshot"]        = h_editor.screenshot,
-  ["editor_manage"]            = h_editor.manage,
-  ["editor_reload_plugin"]     = h_editor.reload_plugin,
+  ping                       = { inline = function(_) return { ok = true, version = "0.2.0" } end },
+  editor_state               = { module = "mcp.handlers.editor",        fn = "state" },
+  editor_screenshot          = { module = "mcp.handlers.editor",        fn = "screenshot" },
+  editor_manage              = { module = "mcp.handlers.editor",        fn = "manage" },
+  editor_reload_plugin       = { module = "mcp.handlers.editor",        fn = "reload_plugin" },
 
   -- collection
-  ["collection_manage"]        = h_collection.manage,
-  ["collection_get_hierarchy"] = h_collection.get_hierarchy,
-  ["collection_open"]          = h_collection.open,
-  ["collection_save"]          = h_collection.save,
+  collection_manage          = { module = "mcp.handlers.collection",    fn = "manage" },
+  collection_get_hierarchy   = { module = "mcp.handlers.collection",    fn = "get_hierarchy" },
+  collection_open            = { module = "mcp.handlers.collection",    fn = "open" },
+  collection_save            = { module = "mcp.handlers.collection",    fn = "save" },
 
   -- gameobject
-  ["gameobject_create"]        = h_gameobject.create,
-  ["gameobject_set_property"]  = h_gameobject.set_property,
-  ["gameobject_get_properties"]= h_gameobject.get_properties,
-  ["gameobject_find"]          = h_gameobject.find,
-  ["gameobject_manage"]        = h_gameobject.manage,
+  gameobject_create          = { module = "mcp.handlers.gameobject",    fn = "create" },
+  gameobject_set_property    = { module = "mcp.handlers.gameobject",    fn = "set_property" },
+  gameobject_get_properties  = { module = "mcp.handlers.gameobject",    fn = "get_properties" },
+  gameobject_find            = { module = "mcp.handlers.gameobject",    fn = "find" },
+  gameobject_manage          = { module = "mcp.handlers.gameobject",    fn = "manage" },
 
   -- component
-  ["component_add"]            = h_component.add,
-  ["component_remove"]         = h_component.remove,
+  component_add              = { module = "mcp.handlers.component",     fn = "add" },
+  component_remove           = { module = "mcp.handlers.component",     fn = "remove" },
 
   -- script
-  ["script_create"]            = h_script.create,
-  ["script_attach"]            = h_script.attach,
-  ["script_patch"]             = h_script.patch,
-  ["script_manage"]            = h_script.manage,
+  script_create              = { module = "mcp.handlers.script",        fn = "create" },
+  script_attach              = { module = "mcp.handlers.script",        fn = "attach" },
+  script_patch               = { module = "mcp.handlers.script",        fn = "patch" },
+  script_manage              = { module = "mcp.handlers.script",        fn = "manage" },
 
   -- resource
-  ["resource_manage"]          = h_resource.manage,
-  ["material_manage"]          = h_resource.material_manage,
-  ["particlefx_manage"]        = h_resource.particlefx_manage,
-  ["atlas_manage"]             = h_resource.atlas_manage,
+  resource_manage            = { module = "mcp.handlers.resource",      fn = "manage" },
+  material_manage            = { module = "mcp.handlers.resource",      fn = "material_manage" },
+  particlefx_manage          = { module = "mcp.handlers.resource",      fn = "particlefx_manage" },
+  atlas_manage               = { module = "mcp.handlers.resource",      fn = "atlas_manage" },
+  tilesource_manage          = { module = "mcp.handlers.resource",      fn = "tilesource_manage" },
+  tilemap_manage             = { module = "mcp.handlers.resource",      fn = "tilemap_manage" },
 
   -- filesystem
-  ["filesystem_manage"]        = h_filesystem.manage,
+  filesystem_manage          = { module = "mcp.handlers.filesystem",    fn = "manage" },
 
   -- input
-  ["input_binding_manage"]     = h_input.manage,
+  input_binding_manage       = { module = "mcp.handlers.input_binding", fn = "manage" },
 
   -- project
-  ["project_run"]              = h_project.run,
-  ["project_manage"]           = h_project.manage,
-  ["logs_read"]                = h_project.logs_read,
-  ["batch_execute"]            = h_project.batch_execute,
+  project_run                = { module = "mcp.handlers.project",       fn = "run" },
+  project_manage             = { module = "mcp.handlers.project",       fn = "manage" },
+  logs_read                  = { module = "mcp.handlers.project",       fn = "logs_read" },
+  batch_execute              = { module = "mcp.handlers.project",       fn = "batch_execute" },
 }
+
+-- Resolve a registered tool to its current callable. Returns nil if unknown.
+local function resolve(tool_name)
+  local entry = TOOLS[tool_name]
+  if not entry then return nil end
+  if entry.inline then return entry.inline end
+  local mod = require(entry.module)
+  return mod[entry.fn]
+end
+
+-- batch_execute needs a flat name→callable map; build one lazily.
+local function tools_callable_map()
+  local out = {}
+  for name, _ in pairs(TOOLS) do
+    out[name] = resolve(name)
+  end
+  return out
+end
 
 -- ============ HTTP route handler ============
 local function dispatch(tool_name)
   return function(request)
     local body = request.body or {}
-    local handler = TOOLS[tool_name]
+    local handler = resolve(tool_name)
     if handler == nil then
       return http.server.json_response({
         ok = false,
@@ -83,7 +95,11 @@ local function dispatch(tool_name)
         message = "No handler for tool: " .. tool_name,
       }, 404)
     end
-    -- Wrap handler call to catch Lua errors and report them structurally
+    -- For batch_execute, refresh the registry reference each call.
+    if tool_name == "batch_execute" then
+      local proj = require("mcp.handlers.project")
+      if proj._set_tools_registry then proj._set_tools_registry(tools_callable_map()) end
+    end
     local ok, result_or_err = pcall(handler, body)
     if not ok then
       print("[defold-ai] handler error in " .. tool_name .. ": " .. tostring(result_or_err))
@@ -110,9 +126,8 @@ function M.get_http_server_routes()
   for tool_name, _ in pairs(TOOLS) do
     table.insert(routes, http.server.route("/mcp/" .. tool_name, "POST", "json", dispatch(tool_name)))
   end
-  -- Convenience GET /mcp/ping for browser/curl sanity checks
   table.insert(routes, http.server.route("/mcp/ping", "GET", function(_)
-    return http.server.json_response({ ok = true, version = "0.1.0" })
+    return http.server.json_response({ ok = true, version = "0.2.0" })
   end))
   return routes
 end
@@ -140,9 +155,8 @@ function M.get_commands()
 end
 
 -- ============ Boot announce ============
-print("[defold-ai] editor script loaded — " .. util.count_tools(TOOLS) .. " tools registered")
+print("[defold-ai] editor script loaded — " .. util.count_tools(TOOLS) .. " tools registered (v0.2.0)")
 print("[defold-ai] HTTP server at " .. http.server.url)
--- Best-effort: persist URL for the Python server to discover
 local ok, err = pcall(util.write_url_file, http.server.url)
 if not ok then
   print("[defold-ai] could not write ~/.defold_ai_url: " .. tostring(err))

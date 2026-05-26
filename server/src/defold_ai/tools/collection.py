@@ -16,10 +16,21 @@ def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
 
         Ops:
           • ``create``(path, name=""): create a new .collection at path
-          • ``save_as``(path): save the currently edited collection as path
-          • ``get_roots``(): list open collections; flag the edited one
           • ``open``(path): open an existing .collection
           • ``save``(): save the currently edited collection
+          • ``add_instance``(path, id, prototype, position?, rotation?, scale?):
+            Append a GO reference (``instances {...}``) to an existing
+            .collection file. ``prototype`` is the res:// path of the .go.
+          • ``add_embedded``(path, id, components=[...], position?, rotation?, scale?):
+            Append a GO defined inline (``embedded_instances {...}``). The
+            ``components`` list uses the same schema as
+            ``gameobject_manage(op="create_file")``.
+          • ``remove_instance``(path, id): Remove an instance (reference or
+            embedded) by id.
+          • ``save_as`` / ``get_roots``: planned (Defold editor API gap).
+
+        Position/rotation/scale accept ``{x,y,z[,w]}`` dicts. Defaults: zero
+        position, identity rotation, unit scale.
         """
         return client.call("collection_manage", {"op": op, "params": params or {}})
 

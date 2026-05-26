@@ -79,8 +79,34 @@ def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
 
     @mcp.tool()
     def gameobject_manage(op: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Game object tree management.
+        """Game object tree management + standalone .go file creation.
 
-        Ops: ``delete``, ``duplicate``, ``rename``, ``reparent``, ``get_children``.
+        Ops:
+          • ``create_file``(path, components=[...]): create a reusable .go file
+            with structured components. Each component is either a reference
+            (``{id, component: "/path/to.script"}``) or an embedded component
+            (``{id, type: "sprite|collisionobject|camera|...", data: {...}}``).
+            The ``data`` dict is rendered to Defold's escaped protobuf-text
+            format automatically — no manual quoting required.
+          • ``delete``(path): remove a GO from its parent collection.
+          • ``get_children``(path): list direct children.
+          • ``duplicate`` / ``rename`` / ``reparent``: planned for v0.3.
+
+        Example — a player .go with sprite + script + collisionobject::
+
+          gameobject_manage("create_file", {
+            "path": "/player/player.go",
+            "components": [
+              {"id": "script", "component": "/player/player.script"},
+              {"id": "sprite", "type": "sprite", "data": {
+                  "default_animation": "player",
+                  "material": "/builtins/materials/sprite.material",
+                  "blend_mode": "BLEND_MODE_ALPHA",
+                  "textures": [{"sampler": "texture_sampler",
+                                "texture": "/assets/sprites.atlas"}],
+              }},
+              {"id": "collision", "type": "collisionobject", "data": {...}},
+            ],
+          })
         """
         return client.call("gameobject_manage", {"op": op, "params": params or {}})

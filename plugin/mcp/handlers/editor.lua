@@ -44,13 +44,21 @@ function M.manage(body)
 end
 
 function M.reload_plugin(body)
-  -- Defold reloads editor scripts via Project > Reload Editor Scripts.
-  -- We can't trigger that menu programmatically from an editor script,
-  -- but we surface clear guidance.
+  -- Invalidate cached `require` entries for our handler modules so the next
+  -- HTTP request reloads them from disk. Defold won't re-run the entry-point
+  -- script without "Project > Reload Editor Scripts", but module-level edits
+  -- inside handlers/ + lib/ become live immediately after this call.
+  local reloaded = {}
+  for name, _ in pairs(package.loaded or {}) do
+    if name:find("^mcp%.") then
+      package.loaded[name] = nil
+      table.insert(reloaded, name)
+    end
+  end
   return {
     ok = true,
-    note = "Editor scripts auto-reload on file change in Defold 1.10+. " ..
-           "If not, use Project > Reload Editor Scripts in the menu.",
+    reloaded_modules = reloaded,
+    note = "Module require-cache cleared. Restart Defold (or use Project > Reload Editor Scripts) for entry-point changes.",
   }
 end
 

@@ -4,16 +4,133 @@ local util = require "mcp.lib.util"
 
 local M = {}
 
--- Generate a unique id by appending an integer.
 local function unique_id(prefix)
   prefix = prefix or "go"
   return prefix .. "_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
 end
 
+-- ============ Protobuf-text serializer for embedded component data ============
+-- Defold .go files store embedded component bodies as escaped protobuf-text
+-- strings inside the `data:` field. We need to:
+--   1. Render the body as standard pb-text (key: value, nested {})
+--   2. Wrap each line in quotes with internal quotes escaped
+--   3. Use Defold's multi-string concatenation convention (one quoted segment
+--      per line, plus a trailing "" sentinel)
+--
+-- Input format (a Lua table of component spec):
+--   { id="sprite", type="sprite", data = {
+--       default_animation = "player",
+--       material = "/builtins/materials/sprite.material",
+--       textures = { { sampler="texture_sampler", texture="/x.atlas" } },
+--   } }
+
+local function _is_array(t)
+  if type(t) ~= "table" then return false end
+  local n = 0
+  for _ in pairs(t) do n = n + 1 end
+  for i = 1, n do
+    if t[i] == nil then return false end
+  end
+  return n > 0
+end
+
+-- Render a Lua value to one or more pb-text lines. Returns a list of lines
+-- (no trailing newlines). `key` is the field name; pass nil for root.
+local function _render_pb(key, value, indent)
+  indent = indent or 0
+  local pad = string.rep("  ", indent)
+  local lines = {}
+  if type(value) == "table" then
+    if _is_array(value) then
+      -- Array → emit one block per item, all under the same key
+      for _, v in ipairs(value) do
+        for _, l in ipairs(_render_pb(key, v, indent)) do
+          table.insert(lines, l)
+        end
+      end
+    else
+      table.insert(lines, pad .. (key and (key .. " {") or "{"))
+      for k, v in pairs(value) do
+        for _, l in ipairs(_render_pb(k, v, indent + 1)) do
+          table.insert(lines, l)
+        end
+      end
+      table.insert(lines, pad .. "}")
+    end
+  elseif type(value) == "string" then
+    -- Heuristic: identifiers in ALL_CAPS_OR_PB are enum literals, not strings.
+    if value:match("^[A-Z_][A-Z0-9_]*$") then
+      table.insert(lines, pad .. key .. ": " .. value)
+    else
+      table.insert(lines, pad .. key .. ': "' .. value .. '"')
+    end
+  elseif type(value) == "number" then
+    table.insert(lines, pad .. key .. ": " .. tostring(value))
+  elseif type(value) == "boolean" then
+    table.insert(lines, pad .. key .. ": " .. (value and "true" or "false"))
+  end
+  return lines
+end
+
+-- Render a `data` table to the "quoted multi-line string" form used by .go files.
+local function _render_embedded_data(data_tbl)
+  if type(data_tbl) ~= "table" then return '""' end
+  local body_lines = {}
+  for k, v in pairs(data_tbl) do
+    for _, l in ipairs(_render_pb(k, v, 0)) do
+      table.insert(body_lines, l)
+    end
+  end
+  if #body_lines == 0 then return '""' end
+  local quoted = {}
+  for _, line in ipairs(body_lines) do
+    -- Escape backslashes, then quotes; append \n; wrap in quotes.
+    local escaped = line:gsub('\\', '\\\\'):gsub('"', '\\"')
+    table.insert(quoted, '"' .. escaped .. '\\n"')
+  end
+  table.insert(quoted, '""')  -- trailing sentinel
+  return table.concat(quoted, "\n  ")
+end
+
+-- Render a full .go file from a list of component specs.
+local function render_go_file(components)
+  local out = {}
+  for _, c in ipairs(components or {}) do
+    if c.component then
+      -- Component reference: external script/atlas/etc.
+      table.insert(out, "components {")
+      table.insert(out, '  id: "' .. (c.id or "comp") .. '"')
+      table.insert(out, '  component: "' .. util.norm_resource_path(c.component) .. '"')
+      -- Optional script-property overrides
+      for k, v in pairs(c.properties or {}) do
+        if type(v) == "number" then
+          table.insert(out, '  properties {')
+          table.insert(out, '    id: "' .. k .. '"')
+          table.insert(out, '    value: "' .. tostring(v) .. '"')
+          table.insert(out, '    type: PROPERTY_TYPE_NUMBER')
+          table.insert(out, '  }')
+        end
+      end
+      table.insert(out, "}")
+    else
+      -- Embedded component: full pb-text body inside data: "..."
+      table.insert(out, "embedded_components {")
+      table.insert(out, '  id: "' .. (c.id or "comp") .. '"')
+      table.insert(out, '  type: "' .. (c.type or "script") .. '"')
+      table.insert(out, '  data: ' .. _render_embedded_data(c.data or {}))
+      table.insert(out, "}")
+    end
+  end
+  return table.concat(out, "\n") .. "\n"
+end
+
+-- ============ Public ops ============
+
 function M.create(body)
   local collection = util.norm_resource_path(body.collection or "")
   if collection == "" then
-    return util.error_response("MISSING_PARAM", "params.collection is required (e.g. /main/main.collection)")
+    return util.error_response("MISSING_PARAM",
+      "params.collection is required. To create a standalone .go file, use op='create_file' on gameobject_manage.")
   end
   if not editor.resource_attributes(collection).exists then
     return util.error_response("NOT_FOUND", "Collection not found at " .. collection)
@@ -51,10 +168,8 @@ function M.set_property(body)
   if path == "" or property == "" then
     return util.error_response("MISSING_PARAM", "set_property needs both 'path' and 'property'")
   end
-  -- Script-property overrides use the __ prefix in transactions.
   local prop_name = property
   if not property:find("^__") and property:sub(1, 1) == ":" then
-    -- explicit "::prop" syntax forced as override
     prop_name = "__" .. property:sub(2)
   end
   editor.transact({ editor.tx.set(path, prop_name, body.value) })
@@ -104,11 +219,27 @@ end
 function M.manage(body)
   local op = body.op or ""
   local params = body.params or {}
-  if op == "delete" then
-    -- Delete via removing from the parent collection's children list.
+
+  if op == "create_file" then
+    -- Create a standalone .go file with structured components + embedded
+    -- components. Fixes the gap where gameobject_create only adds GOs to a
+    -- collection (can't produce a reusable prototype file).
+    --
+    -- params:
+    --   path:       res:// path ending in .go (required)
+    --   components: list of { id, component? (path) | type, data? }
+    local path = util.norm_resource_path(params.path or "")
+    if path == "" then return util.error_response("MISSING_PARAM", "create_file needs path") end
+    if not path:match("%.go$") then
+      return util.error_response("INVALID_PARAM", "create_file path must end in .go")
+    end
+    local content = render_go_file(params.components or {})
+    editor.create_resources({ { path, content } })
+    return { ok = true, path = path, component_count = #(params.components or {}) }
+
+  elseif op == "delete" then
     local path = params.path or ""
     if path == "" then return util.error_response("MISSING_PARAM", "delete needs path") end
-    -- We expect path like "/main/main.collection!/go_id"
     local coll, id = path:match("^(.-)!/(.+)$")
     if not coll then
       return util.error_response("INVALID_PATH", "Expected /collection!/id form, got: " .. path)
@@ -116,12 +247,13 @@ function M.manage(body)
     local kids = editor.get(coll, "children") or {}
     for i, child in ipairs(kids) do
       if tostring(util.try_get(child, "id")) == id then
-        editor.transact({ editor.tx.remove(coll, "children", i - 1) })  -- 0-based
+        editor.transact({ editor.tx.remove(coll, "children", i - 1) })
         editor.save()
         return { ok = true, deleted = path }
       end
     end
     return util.error_response("NOT_FOUND", "GO id not found in collection: " .. id)
+
   elseif op == "get_children" then
     local path = params.path or ""
     if path == "" then return util.error_response("MISSING_PARAM", "get_children needs path") end
@@ -134,11 +266,15 @@ function M.manage(body)
       })
     end
     return { ok = true, children = out }
+
   elseif op == "duplicate" or op == "rename" or op == "reparent" then
     return util.error_response("NOT_IMPLEMENTED",
-      op .. " requires reading + reconstructing the node spec; planned for v0.2")
+      op .. " requires reading + reconstructing the node spec; planned for v0.3")
   end
   return util.error_response("UNKNOWN_OP", "Unknown gameobject_manage op: " .. op)
 end
+
+-- Expose the .go renderer so other handlers can reuse it.
+M._render_go_file = render_go_file
 
 return M

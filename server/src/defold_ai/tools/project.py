@@ -11,31 +11,40 @@ from defold_ai.client import DefoldEditorClient
 
 def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
     @mcp.tool()
-    def project_run(mode: str = "main", scene: str = "") -> dict[str, Any]:
-        """Build and run the project.
+    def project_run(mode: str = "main", scene: str = "", variant: str = "debug") -> dict[str, Any]:
+        """Headless build + launch dmengine for the running game.
 
-        Defold's primary launch path is the editor's Build menu. This tool
-        triggers that programmatically via the editor command system.
+        Pipeline:
+          1. Locate Defold's bundled JDK + bob.jar (auto-discovery covers macOS,
+             Linux, Windows; override with ``DEFOLD_AI_JAVA`` / ``DEFOLD_AI_BOB_JAR``).
+          2. Run ``bob --variant=<variant> build`` and parse its output for
+             compile errors — returns a structured ``BUILD_ERROR`` with
+             ``errors=[{file,line,message}, ...]`` if any.
+          3. On success, spawn dmengine detached; stdout/stderr go to
+             ``./dmengine.log`` in the project. Tail via ``logs_read(source="game")``.
 
         Args:
-            mode: ``"main"`` (run the main collection) | ``"current"`` (run
-                the currently edited collection) | ``"custom"`` (run a
-                specific collection — requires ``scene``)
-            scene: collection path for ``mode="custom"``
+            mode: reserved — accepted for symmetry with future "custom" launches.
+            scene: collection path (currently unused; bob always builds the project root).
+            variant: ``"debug"`` (default) or ``"release"``.
         """
-        return client.call("project_run", {"mode": mode, "scene": scene})
+        return client.call("project_run", {"mode": mode, "scene": scene, "variant": variant})
 
     @mcp.tool()
     def project_manage(op: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Project lifecycle and settings (game.project).
 
         Ops:
-          • ``stop``(): stop the running game (idempotent)
-          • ``build``(): rebuild without running
+          • ``stop``(): SIGTERM any running dmengine processes (idempotent).
+          • ``build``(variant="debug"): headless bob build with structured
+            ``BUILD_ERROR`` output — includes ``errors=[{file,line,message}]``
+            and a tail of the bob output for context.
           • ``settings_get``(key): read a game.project setting (e.g.
-            ``"display.width"``, ``"bootstrap.main_collection"``)
-          • ``settings_set``(key, value): write a game.project setting
-          • ``info``(): project metadata (name, version, paths)
+            ``"display.width"``, ``"bootstrap.main_collection"``).
+          • ``settings_set``(key, value): edit game.project in place. Creates
+            the section if missing; replaces existing key; otherwise appends.
+            Preserves the rest of the file byte-for-byte.
+          • ``info``(): project metadata (root, version, discovered toolchain).
         """
         return client.call("project_manage", {"op": op, "params": params or {}})
 
