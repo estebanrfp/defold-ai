@@ -260,8 +260,6 @@ function M.manage(body)
     local content, err = util.read_file(path)
     if not content then return util.error_response("READ_ERROR", err) end
     -- Find any block of form `(embedded_)?instances { ... id: "<id>" ... }`
-    -- We do a coarse scan: locate top-level `instances {` or `embedded_instances {`
-    -- blocks and rebuild without the matching one.
     local out, i, removed = {}, 1, 0
     while true do
       local s = content:find("\n[%w_]*instances%s*{", i)
@@ -269,8 +267,7 @@ function M.manage(body)
         table.insert(out, content:sub(i))
         break
       end
-      table.insert(out, content:sub(i, s))  -- include newline
-      -- Find matching closing brace by counting (instances blocks don't nest).
+      table.insert(out, content:sub(i, s))
       local depth, j = 0, s + 1
       while j <= #content do
         local ch = content:sub(j, j)
@@ -284,7 +281,6 @@ function M.manage(body)
       local block = content:sub(s + 1, j)
       if block:match('id:%s*"' .. id .. '"') then
         removed = removed + 1
-        -- skip the trailing newline after the closing brace if any
         if content:sub(j + 1, j + 1) == "\n" then j = j + 1 end
       else
         table.insert(out, block)
@@ -294,9 +290,22 @@ function M.manage(body)
     if removed == 0 then
       return util.error_response("NOT_FOUND", "no instance with id: " .. id)
     end
-    local wok, werr = util.write_file(path, table.concat(out))
+    local new_content = table.concat(out)
+    -- Auto-clean: drop any stale `children: "<id>"` lines that referenced
+    -- the just-removed instance (the parent block would otherwise survive
+    -- with a dangling reference, causing bob to fail with the opaque
+    -- "Cannot invoke getId() because o2 is null").
+    local cleaned, cleanup_count = new_content:gsub(
+      '%s*children:%s*"' .. id .. '"%s*\n?', "\n"
+    )
+    -- Collapse the extra newline we may have left behind.
+    cleaned = cleaned:gsub("\n\n\n+", "\n\n")
+    local wok, werr = util.write_file(path, cleaned)
     if not wok then return util.error_response("WRITE_ERROR", werr) end
-    return { ok = true, path = path, removed_id = id, removed_count = removed }
+    return {
+      ok = true, path = path, removed_id = id, removed_count = removed,
+      cleaned_child_refs = cleanup_count,
+    }
   end
   return util.error_response("UNKNOWN_OP", "Unknown collection_manage op: " .. op)
 end

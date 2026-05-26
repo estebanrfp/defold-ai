@@ -11,15 +11,58 @@ the source of truth, this file is the human-readable summary.
 
 Planned next:
 
-- `material_manage(set_constant / get)` — structured `.material` edits.
-- `particlefx_manage(apply_preset)` — `rain / snow / smoke / sparkle / explosion`.
+- `render_manage(create)` — generate a `.render` + `.render_script` pair
+  from a small DSL (default predicates / passes / cull modes). Currently
+  custom rendering needs hand-written shaders + bob proto-text.
+- `material_manage(create_full)` — accept structured `samplers`,
+  `vertex_constants`, `fragment_constants` (with `CONSTANT_TYPE_USER` +
+  initial vec4 values) instead of forcing a `resource_manage write`.
+- `material_manage(set_constant / get)` — runtime constant edits.
+- `particlefx_manage(apply_preset)` — rain / snow / smoke / sparkle / explosion.
 - `gameobject_manage(duplicate / rename / reparent)`.
-- `collection_manage(save_as / get_roots)` once Defold exposes the API.
-- `editor_screenshot` — pending Defold editor-script API.
-- Windows discovery paths for `find_defold_toolchain` (currently best-effort).
-- An `examples/applegame` folder so the README walkthrough is runnable.
-- Reliable hot-reload of handlers (current `editor_reload_plugin` is
-  unreliable — see Known issues in 0.3.0).
+- `collection_manage(save_as / get_roots)` — Defold editor API gap.
+- `editor_screenshot` — Defold editor API gap.
+- Windows paths for `find_defold_toolchain`.
+- `examples/applegame` runnable demo.
+- A reliable hot-reload path (current `editor_reload_plugin` invalidates
+  `package.loaded` but Defold still keeps a bytecode cache — see Known
+  issues in 0.3.0).
+
+## [0.4.0] — 2026-05-26
+
+Driven by friction points hit while iterating on AppleGame 3D
+(sky shader attempt + dangling collection refs).
+
+### Added
+
+- **`script_patch`** now accepts every editable Defold text resource, not
+  just Lua: `.collection`, `.go`, `.material`, `.vp`, `.fp`, `.atlas`,
+  `.tilesource`, `.tilemap`, `.input_binding`, `.gui`, `.particlefx`,
+  `.render`, `.font`, `.project`. Anchor-based string-replace is the
+  natural tool for surgical edits to all of these — restricting it to
+  Lua forced a fall-back to raw `sed` for the rest.
+
+### Changed
+
+- **`collection_manage(remove_instance)`** now auto-cleans dangling
+  `children: "<id>"` lines from the surviving instance blocks after a
+  remove. Without this, a removed GO that was a transform child of
+  another instance left bob failing on the next build with the deeply
+  confusing `Cannot invoke "GameObject$InstanceDesc$Builder.getId()"
+  because "o2" is null`. Returns an extra `cleaned_child_refs` count for
+  visibility.
+- **`resource_manage(delete)`** is now idempotent: deleting a file that
+  doesn't exist returns `{ok: true, note: "already absent (no-op)"}`,
+  and the success/failure check now uses a post-delete `io.open` probe
+  instead of trusting `os.remove`'s return — some Defold sandbox versions
+  return `(nil, nil)` from `os.remove` even on a successful delete, which
+  produced misleading `DELETE_ERROR: nil` responses.
+
+### Fixed
+
+- No more `DELETE_ERROR: nil` when the file actually got deleted.
+- No more opaque `o2 is null` build errors after removing a parented GO
+  from a collection.
 
 ## [0.3.0] — 2026-05-26
 
@@ -201,7 +244,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/estebanrfp/defold-ai/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/estebanrfp/defold-ai/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/estebanrfp/defold-ai/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/estebanrfp/defold-ai/releases/tag/v0.1.0

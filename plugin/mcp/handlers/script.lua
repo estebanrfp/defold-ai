@@ -4,16 +4,39 @@ local util = require "mcp.lib.util"
 
 local M = {}
 
+-- Extensions allowed for script_create / script_manage(read).
 local SCRIPT_EXTENSIONS = {
   [".script"] = true, [".gui_script"] = true,
   [".render_script"] = true, [".lua"] = true,
 }
 
-local function valid_script_path(path)
-  for ext, _ in pairs(SCRIPT_EXTENSIONS) do
+-- Extensions allowed for script_patch. Strictly all editable text resources —
+-- not just Lua. Defold proto-text formats (.collection, .go, .material, ...)
+-- benefit from anchor-based patching just as much as scripts do.
+local PATCHABLE_EXTENSIONS = {
+  [".script"] = true, [".gui_script"] = true,
+  [".render_script"] = true, [".lua"] = true,
+  [".collection"] = true, [".go"] = true,
+  [".material"] = true, [".vp"] = true, [".fp"] = true,
+  [".atlas"] = true, [".tilesource"] = true, [".tilemap"] = true,
+  [".input_binding"] = true, [".gui"] = true, [".particlefx"] = true,
+  [".render"] = true, [".font"] = true, [".display_profiles"] = true,
+  [".project"] = true,  -- game.project (anchor-replace inside sections)
+}
+
+local function _has_ext(path, ext_map)
+  for ext, _ in pairs(ext_map) do
     if path:sub(-#ext) == ext then return true end
   end
   return false
+end
+
+local function valid_script_path(path)
+  return _has_ext(path, SCRIPT_EXTENSIONS)
+end
+
+local function valid_patch_path(path)
+  return _has_ext(path, PATCHABLE_EXTENSIONS)
 end
 
 function M.create(body)
@@ -57,9 +80,11 @@ function M.patch(body)
   local new_text = body.new_text or ""
   local replace_all = body.replace_all == true
 
-  if not valid_script_path(path) then
+  if not valid_patch_path(path) then
     return util.error_response("INVALID_PATH",
-      "Path must end in .script, .gui_script, .render_script, or .lua")
+      "Path must end in one of: .script, .gui_script, .render_script, .lua, " ..
+      ".collection, .go, .material, .vp, .fp, .atlas, .tilesource, .tilemap, " ..
+      ".input_binding, .gui, .particlefx, .render, .font, .project")
   end
 
   -- Read via io (path resolution: convert res:// to project-relative)

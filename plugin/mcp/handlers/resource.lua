@@ -31,8 +31,21 @@ function M.manage(body)
   elseif op == "delete" then
     local path = params.path or ""
     local relative = path:gsub("^/", "")
+    -- Idempotent: if the file no longer exists, treat as success. Some sandbox
+    -- versions return (nil, nil) from os.remove even on a successful delete,
+    -- so we double-check via io.open before reporting an error.
+    local pre_exists = io.open(relative, "r")
+    if pre_exists then pre_exists:close() end
+    if not pre_exists then
+      return { ok = true, deleted = path, note = "already absent (no-op)" }
+    end
     local ok, err = os.remove(relative)
-    if not ok then return util.error_response("DELETE_ERROR", tostring(err)) end
+    local post_exists = io.open(relative, "r")
+    if post_exists then post_exists:close() end
+    if post_exists then
+      return util.error_response("DELETE_ERROR",
+        "File still exists after os.remove: " .. tostring(err or "unknown"))
+    end
     return { ok = true, deleted = path }
   elseif op == "list" then
     return util.error_response("NOT_IMPLEMENTED",
