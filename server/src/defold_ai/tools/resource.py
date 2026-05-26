@@ -45,8 +45,17 @@ def register(mcp: FastMCP, client: DefoldEditorClient) -> None:
     def particlefx_manage(op: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Particle FX (.particlefx) resource ops.
 
-        Ops: ``create``, ``set_emitter``, ``add_emitter``, ``apply_preset``
-        (presets: ``rain``, ``snow``, ``smoke``, ``sparkle``, ``explosion``).
+        Ops:
+          • ``create``(path): write a minimal one-emitter `.particlefx`.
+          • ``apply_preset``(path, preset, overrides=None): generate a
+            ready-to-render `.particlefx` from a curated preset library.
+            Built-in presets: ``rain``, ``snow``, ``smoke``, ``sparkle``,
+            ``explosion``. The shared white tilesource is auto-created at
+            ``/assets/particles/white.tilesource`` (needs an existing
+            ``/assets/images/white.png`` or ``DEFOLD_AI_WHITE_IMAGE`` env var).
+            ``overrides`` lets you tweak any preset field without writing
+            the whole `.particlefx` from scratch.
+          • ``list_presets``(): return the available preset names.
         """
         return client.call("particlefx_manage", {"op": op, "params": params or {}})
 

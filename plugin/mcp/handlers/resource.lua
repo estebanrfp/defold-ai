@@ -80,6 +80,160 @@ function M.material_manage(body)
 end
 
 -- ============ Particle FX ============
+
+-- Curated presets, ported in spirit from godot-ai. Defold particle.fx is a
+-- billboard-sprite system (not GPUParticles3D-style mesh) so the presets
+-- target an EMITTER_TYPE_BOX (or SPHERE) with a `tile_source` pointing at a
+-- 1x1 white texture; tint is applied via PARTICLE_KEY_RED/GREEN/BLUE/ALPHA
+-- keyframe curves.
+--
+-- The white tile source is shared (`/assets/particles/white.tilesource`) and
+-- created on-demand by `_ensure_white_tilesource` so callers don't have to
+-- pre-prepare assets.
+local PRESETS = {
+  rain = {
+    duration = 1.0, mode = "PLAY_MODE_LOOP", space = "EMISSION_SPACE_WORLD",
+    type = "EMITTER_TYPE_BOX",
+    box_extents = { x = 10, y = 0.1, z = 10 },
+    spawn_rate = 400, particle_life = 1.0,
+    initial_speed = 18, gravity = -2.0,
+    scale_xy = { 0.04, 0.4 },  -- {width, height} streak
+    color = { r = 0.7, g = 0.85, b = 1.0, a = 0.7 },
+    blend = "BLEND_MODE_ALPHA",
+  },
+  snow = {
+    duration = 1.0, mode = "PLAY_MODE_LOOP", space = "EMISSION_SPACE_WORLD",
+    type = "EMITTER_TYPE_BOX",
+    box_extents = { x = 10, y = 0.1, z = 10 },
+    spawn_rate = 90, particle_life = 5.0,
+    initial_speed = 1.2, gravity = -0.6,
+    scale_xy = { 0.12, 0.12 },
+    color = { r = 1.0, g = 1.0, b = 1.0, a = 0.9 },
+    blend = "BLEND_MODE_ALPHA",
+  },
+  smoke = {
+    duration = 1.0, mode = "PLAY_MODE_LOOP", space = "EMISSION_SPACE_WORLD",
+    type = "EMITTER_TYPE_SPHERE",
+    sphere_radius = 0.4,
+    spawn_rate = 40, particle_life = 3.0,
+    initial_speed = 1.0, gravity = 0.5,
+    scale_xy = { 0.7, 0.7 },
+    color = { r = 0.3, g = 0.3, b = 0.3, a = 0.6 },
+    blend = "BLEND_MODE_ALPHA",
+  },
+  sparkle = {
+    duration = 0.5, mode = "PLAY_MODE_LOOP", space = "EMISSION_SPACE_WORLD",
+    type = "EMITTER_TYPE_SPHERE",
+    sphere_radius = 0.2,
+    spawn_rate = 60, particle_life = 0.8,
+    initial_speed = 3.0, gravity = -8.0,
+    scale_xy = { 0.08, 0.08 },
+    color = { r = 1.0, g = 0.95, b = 0.4, a = 1.0 },
+    blend = "BLEND_MODE_ADD",
+  },
+  explosion = {
+    duration = 0.15, mode = "PLAY_MODE_ONCE", space = "EMISSION_SPACE_WORLD",
+    type = "EMITTER_TYPE_SPHERE",
+    sphere_radius = 0.3,
+    spawn_rate = 800, particle_life = 0.6,
+    initial_speed = 12, gravity = 0,
+    scale_xy = { 0.2, 0.2 },
+    color = { r = 1.0, g = 0.5, b = 0.1, a = 1.0 },
+    blend = "BLEND_MODE_ADD",
+  },
+}
+
+local function _white_tilesource_path() return "/assets/particles/white.tilesource" end
+
+-- Locate an existing white image in the project. Callers can override with
+-- preset.image or DEFOLD_AI_WHITE_IMAGE; otherwise we look for the conventional
+-- /assets/images/white.png. Returns nil if nothing usable was found.
+local function _find_white_image()
+  local override = os.getenv("DEFOLD_AI_WHITE_IMAGE")
+  if override and override ~= "" then return override end
+  for _, candidate in ipairs({
+    "/assets/images/white.png",
+    "/assets/particles/white.png",
+    "/assets/white.png",
+  }) do
+    if editor.resource_attributes(candidate).exists then return candidate end
+  end
+  return nil
+end
+
+-- Create the small shared tilesource that wraps the white texture; emitters
+-- bind to its single "white" animation. Returns the image path used.
+local function _ensure_white_tilesource()
+  local img = _find_white_image()
+  if not img then
+    error("particle presets need a white.png — create one at /assets/images/white.png " ..
+          "or set DEFOLD_AI_WHITE_IMAGE")
+  end
+  local existing = editor.resource_attributes(_white_tilesource_path())
+  if existing.exists then return img end
+  local ts_content =
+    'image: "' .. img .. '"\n' ..
+    'tile_width: 1\ntile_height: 1\n' ..
+    'tile_margin: 0\ntile_spacing: 0\n' ..
+    'collision: ""\nmaterial_tag: "tile"\ncollision_groups: "default"\n' ..
+    'animations {\n  id: "white"\n  start_tile: 1\n  end_tile: 1\n' ..
+    '  playback: PLAYBACK_NONE\n  fps: 30\n' ..
+    '  flip_horizontal: 0\n  flip_vertical: 0\n}\n' ..
+    'extrude_borders: 0\ninner_padding: 0\n' ..
+    'sprite_trim_mode: SPRITE_TRIM_MODE_OFF\n'
+  editor.create_resources({ { _white_tilesource_path(), ts_content } })
+  return img
+end
+
+-- Build the proto-text body for a particlefx emitter from a preset table.
+local function _render_emitter(preset)
+  local lines = {
+    'emitters {',
+    '  id: "emitter"',
+    '  mode: ' .. preset.mode,
+    '  duration: ' .. preset.duration,
+    '  space: ' .. preset.space,
+    '  position { x: 0 y: 0 z: 0 }',
+    -- Rotate 180° around X so emission direction points -Y (down) for rain/snow.
+    '  rotation { x: 1 y: 0 z: 0 w: 0 }',
+    '  tile_source: "' .. _white_tilesource_path() .. '"',
+    '  animation: "white"',
+    '  material: "/builtins/materials/particlefx.material"',
+    '  blend_mode: ' .. preset.blend,
+    '  particle_orientation: PARTICLE_ORIENTATION_DEFAULT',
+    '  inherit_velocity: 0.0',
+    '  max_particle_count: 2000',
+    '  type: ' .. preset.type,
+    '  start_delay: 0.0',
+    '  size_mode: SIZE_MODE_MANUAL',
+  }
+  if preset.type == "EMITTER_TYPE_BOX" then
+    table.insert(lines, '  properties { key: EMITTER_KEY_SIZE_X points { x: 0 y: ' .. preset.box_extents.x .. ' t_x: 1 t_y: 0 } spread: 0 }')
+    table.insert(lines, '  properties { key: EMITTER_KEY_SIZE_Y points { x: 0 y: ' .. preset.box_extents.y .. ' t_x: 1 t_y: 0 } spread: 0 }')
+    table.insert(lines, '  properties { key: EMITTER_KEY_SIZE_Z points { x: 0 y: ' .. preset.box_extents.z .. ' t_x: 1 t_y: 0 } spread: 0 }')
+  elseif preset.type == "EMITTER_TYPE_SPHERE" then
+    table.insert(lines, '  properties { key: EMITTER_KEY_SIZE_X points { x: 0 y: ' .. preset.sphere_radius .. ' t_x: 1 t_y: 0 } spread: 0 }')
+  end
+  -- Spawn rate (emitter property)
+  table.insert(lines, '  properties { key: EMITTER_KEY_SPAWN_RATE points { x: 0 y: ' .. preset.spawn_rate .. ' t_x: 1 t_y: 0 } spread: 0 }')
+  -- Particle life span
+  table.insert(lines, '  properties { key: EMITTER_KEY_PARTICLE_LIFE_TIME points { x: 0 y: ' .. preset.particle_life .. ' t_x: 1 t_y: 0 } spread: 0 }')
+  -- Initial particle speed (downward via emitter rotation; preset.gravity_dir
+  -- selects the orientation in _render_emitter)
+  table.insert(lines, '  properties { key: EMITTER_KEY_PARTICLE_SPEED points { x: 0 y: ' .. preset.initial_speed .. ' t_x: 1 t_y: 0 } spread: 0 }')
+  -- Initial particle size (curve at constant 1 — PARTICLE_KEY_SCALE multiplies)
+  table.insert(lines, '  properties { key: EMITTER_KEY_PARTICLE_SIZE points { x: 0 y: 1 t_x: 1 t_y: 0 } spread: 0 }')
+  -- Per-particle curves (no `spread` on particle_properties — only on properties).
+  table.insert(lines, '  particle_properties { key: PARTICLE_KEY_SCALE points { x: 0 y: ' .. preset.scale_xy[1] .. ' t_x: 1 t_y: 0 } }')
+  local c = preset.color
+  table.insert(lines, '  particle_properties { key: PARTICLE_KEY_RED   points { x: 0 y: ' .. c.r .. ' t_x: 1 t_y: 0 } }')
+  table.insert(lines, '  particle_properties { key: PARTICLE_KEY_GREEN points { x: 0 y: ' .. c.g .. ' t_x: 1 t_y: 0 } }')
+  table.insert(lines, '  particle_properties { key: PARTICLE_KEY_BLUE  points { x: 0 y: ' .. c.b .. ' t_x: 1 t_y: 0 } }')
+  table.insert(lines, '  particle_properties { key: PARTICLE_KEY_ALPHA points { x: 0 y: ' .. c.a .. ' t_x: 1 t_y: 0 } }')
+  table.insert(lines, '}')
+  return table.concat(lines, '\n') .. '\n'
+end
+
 function M.particlefx_manage(body)
   local op = body.op or ""
   local params = body.params or {}
@@ -98,8 +252,31 @@ function M.particlefx_manage(body)
     editor.create_resources({ { path, content } })
     return { ok = true, path = path }
   elseif op == "apply_preset" then
-    return util.error_response("NOT_IMPLEMENTED",
-      "Preset library coming later (rain, snow, smoke, sparkle, explosion).")
+    local path = util.norm_resource_path(params.path or "")
+    local preset_name = params.preset or ""
+    if path == "" or preset_name == "" then
+      return util.error_response("MISSING_PARAM", "apply_preset needs path + preset")
+    end
+    local preset = PRESETS[preset_name]
+    if not preset then
+      local available = {}
+      for k, _ in pairs(PRESETS) do table.insert(available, k) end
+      return util.error_response("UNKNOWN_PRESET",
+        "Unknown preset: " .. preset_name .. ". Available: " .. table.concat(available, ", "))
+    end
+    -- Merge overrides
+    if type(params.overrides) == "table" then
+      for k, v in pairs(params.overrides) do preset[k] = v end
+    end
+    _ensure_white_tilesource()
+    local content = _render_emitter(preset)
+    editor.create_resources({ { path, content } })
+    return { ok = true, path = path, preset = preset_name }
+  elseif op == "list_presets" then
+    local out = {}
+    for k, _ in pairs(PRESETS) do table.insert(out, k) end
+    table.sort(out)
+    return { ok = true, presets = out }
   end
   return util.error_response("UNKNOWN_OP", "Unknown particlefx_manage op: " .. op)
 end

@@ -12,21 +12,54 @@ the source of truth, this file is the human-readable summary.
 Planned next:
 
 - `render_manage(create)` — generate a `.render` + `.render_script` pair
-  from a small DSL (default predicates / passes / cull modes). Currently
-  custom rendering needs hand-written shaders + bob proto-text.
+  from a small DSL.
 - `material_manage(create_full)` — accept structured `samplers`,
   `vertex_constants`, `fragment_constants` (with `CONSTANT_TYPE_USER` +
-  initial vec4 values) instead of forcing a `resource_manage write`.
+  initial vec4 values).
 - `material_manage(set_constant / get)` — runtime constant edits.
-- `particlefx_manage(apply_preset)` — rain / snow / smoke / sparkle / explosion.
+- `material_manage(apply_preset)` — common materials (lit, unlit-tint,
+  sky-gradient) ported from godot-ai-style preset libraries.
+- `camera_manage` — abstraction over `camera` component + follow rigs.
 - `gameobject_manage(duplicate / rename / reparent)`.
-- `collection_manage(save_as / get_roots)` — Defold editor API gap.
-- `editor_screenshot` — Defold editor API gap.
+- `collection_manage(save_as / get_roots)`.
+- `editor_screenshot` — Defold editor API gap (engine `/screenshot` does
+  not exist; investigating a `dmengine`-side helper script).
+- A reliable hot-reload path (`editor_reload_plugin` invalidates
+  `package.loaded` but Defold keeps a bytecode cache — workaround is a
+  full editor restart).
 - Windows paths for `find_defold_toolchain`.
 - `examples/applegame` runnable demo.
-- A reliable hot-reload path (current `editor_reload_plugin` invalidates
-  `package.loaded` but Defold still keeps a bytecode cache — see Known
-  issues in 0.3.0).
+
+## [0.5.0] — 2026-05-26
+
+Inspired by reading `godot-ai`'s particle handler. Defold's `.particlefx`
+schema is very different from Godot's GPUParticles3D, but the *preset*
+idea ports cleanly.
+
+### Added
+
+- **`particlefx_manage(apply_preset)`** — curated presets `rain`, `snow`,
+  `smoke`, `sparkle`, `explosion`. Each preset writes a complete
+  `.particlefx` keyed against a shared white tilesource at
+  `/assets/particles/white.tilesource` (auto-created from
+  `/assets/images/white.png` or whatever `DEFOLD_AI_WHITE_IMAGE` points
+  at). Presets take an optional `overrides` table to tweak any field.
+- **`particlefx_manage(list_presets)`** — enumerate available presets so
+  clients can present a menu.
+
+### Notes on Defold particlefx quirks (discovered while porting godot-ai)
+
+- The `gravity` field doesn't exist on Defold emitters; vertical motion
+  comes from the emitter's `rotation` quaternion and
+  `EMITTER_KEY_PARTICLE_SPEED`. Presets rotate 180° around X so emission
+  points -Y by default (rain/snow).
+- `EMITTER_KEY_PARTICLE_LIFE_TIME` lives under `properties`, not
+  `particle_properties` — Godot's tools/_meta_tool wires both to the same
+  domain, but Defold keeps them separate.
+- `particle_properties` entries do *not* accept a `spread` field
+  (only `properties` do). Bob errors otherwise.
+- Emitter texture field is `animation`, not `default_animation` (which is
+  the sprite-component field — easy mis-port).
 
 ## [0.4.0] — 2026-05-26
 
@@ -244,7 +277,8 @@ Initial release.
 - `docs/ARCHITECTURE.md` and `docs/TOOLS.md`.
 - `examples/hello_cube` placeholder.
 
-[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/estebanrfp/defold-ai/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/estebanrfp/defold-ai/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/estebanrfp/defold-ai/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/estebanrfp/defold-ai/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/estebanrfp/defold-ai/compare/v0.1.0...v0.2.0
