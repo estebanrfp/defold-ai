@@ -17,6 +17,36 @@ Planned next:
 - Linux / Windows paths for `find_defold_toolchain` + `editor_screenshot(source="macos")`.
 - `examples/applegame` runnable demo.
 
+## [0.14.0] — 2026-05-27
+
+Two crash-class fixes around `editor_screenshot(source="game")` discovered
+while shipping the AppleGame demo end-to-end.
+
+### Fixed
+
+- **False-positive `EXTENSION_MISSING`**: the 404-detection branch did a
+  naïve `resp:find("404")` over the entire response body. The britzl
+  extension emits temp-file paths like
+  `/var/folders/.../screenshot-1779840427-1.png` — the unix timestamp
+  contains the literal substring `404`, and the handler rejected every
+  successful capture. Replaced with a structural check on the JSON shape
+  (`"path":"…"`) instead of substring scanning.
+- **Silent `cp` failure → stale screenshot returned**: copying the PNG out
+  of the sandbox (`/var/folders/...`) into the project root with `cp`
+  silently no-op'd under some `editor.execute` sandbox configurations.
+  The handler then `_file_size()`'d the *previous* run's leftover file
+  and reported success. Switched the copy to `cat src > dst` (which
+  reliably crosses the sandbox boundary), compared `src_size` vs
+  `dest_size`, and now surface a proper `COPY_FAILED` error with
+  `source_path` so the caller can fall back to reading the temp file
+  directly.
+
+### Changed
+
+- `lib/util.lua`: `local _unpack = unpack or table.unpack` (the order
+  matters — `unpack` is the LuaJIT-native form and the editor's Lua 5.1
+  linter warns on `table.unpack` first even though LuaJIT supports both).
+
 ## [0.13.0] — 2026-05-27
 
 `editor_screenshot(source="game")` finally just works end-to-end. The

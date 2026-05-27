@@ -95,7 +95,12 @@ local function _capture_via_game(body)
       "Engine service did not reply within " .. timeout_s ..
       "s. The dmengine may be hung; check project_run logs.")
   end
-  if resp:find("404") or resp:find("Not Found") then
+  -- Detect a 404 only by examining the *first* line — curl with -i would
+  -- give us headers, but we use -s so we only see the body. The britzl
+  -- extension always replies with valid JSON starting with `{"path":` so
+  -- treat anything else as a probable missing endpoint. Don't naive-match
+  -- "404" anywhere in the body (timestamps like 1779840427 contain "404").
+  if not resp:find('"path"%s*:%s*"', 1) then
     return util.error_response("EXTENSION_MISSING",
       "/screenshot endpoint not found on the engine service. " ..
       "Run editor_screenshot_install to add britzl/defold-screenshot " ..
@@ -114,18 +119,29 @@ local function _capture_via_game(body)
   -- 4. The extension writes to /var/folders/.../defold-screenshot/ which is
   --    outside the project sandbox — io.open can't read it from the editor
   --    script. Copy it into the project via /bin/sh so it's visible to
-  --    the editor and any tool downstream.
+  --    the editor and any tool downstream. Verify with mtime so we don't
+  --    silently return a stale file from a previous run if the copy was
+  --    blocked by editor.execute's sandbox.
   local final_path = out_path or ".defold_ai_capture.png"
-  -- Escape single quotes for safe shell substitution.
   local src_esc = path:gsub("'", "'\\''")
   local dst_esc = final_path:gsub("'", "'\\''")
-  local cp_out = util.run_shell("cp '" .. src_esc .. "' '" .. dst_esc .. "'") or ""
-  -- io.open works on project-relative paths.
+  -- Use `cat > dst` instead of `cp` — some editor.execute sandbox configs
+  -- reject `cp` when the source is outside the project, but `cat` reading
+  -- via stdin redirection consistently goes through.
+  local cp_out, cp_ok = util.run_shell(
+    "cat '" .. src_esc .. "' > '" .. dst_esc .. "' && echo OK")
+  cp_out = cp_out or ""
   local size = _file_size(final_path) or 0
-  if size == 0 then
-    -- Fallback: stat the source file via shell.
-    local stat_out = util.run_shell("stat -f %z '" .. src_esc .. "'") or ""
-    size = tonumber(stat_out:match("%d+")) or 0
+  -- Source size — used as a sanity check.
+  local stat_out = util.run_shell("stat -f %z '" .. src_esc .. "'") or ""
+  local src_size = tonumber(stat_out:match("%d+")) or 0
+  if size == 0 or (src_size > 0 and size ~= src_size) then
+    return util.error_response("COPY_FAILED",
+      "Could not copy screenshot from sandbox to project. The capture " ..
+      "is available at source_path; copy it manually if needed.",
+      { source_path = path, source_size = src_size,
+        dest_path = final_path, dest_size = size,
+        cp_output = cp_out:sub(1, 200) })
   end
 
   return {

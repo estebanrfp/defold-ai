@@ -100,8 +100,10 @@ function M.write_file(path, content)
   return true
 end
 
--- Compatible unpack (Lua 5.1 / LuaJIT have global `unpack`; 5.2+ moved to table.unpack).
-local _unpack = table.unpack or unpack
+-- Compatible unpack: Lua 5.1 / LuaJIT have global `unpack`; only 5.2+ moved
+-- it to table.unpack. Defold runs LuaJIT, so prefer `unpack` first to avoid
+-- the 5.1 linter warning on `table.unpack`.
+local _unpack = unpack or table.unpack
 
 -- Run a command via Defold's editor.execute (preferred — works in the
 -- editor-script sandbox where io.popen / os.execute may be blocked).
