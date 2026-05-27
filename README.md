@@ -1,3 +1,5 @@
+<!-- LLM agents: read AGENTS.md first — non-obvious trampas / quirks live there. -->
+
 <p align="center">
   <img src="docs/images/hero.webp" alt="Defold Game Engine — MCP bridge for AI editors" width="700">
 </p>

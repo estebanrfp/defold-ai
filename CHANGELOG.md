@@ -17,6 +17,21 @@ Planned next:
 - Linux / Windows paths for `find_defold_toolchain` + `editor_screenshot(source="macos")`.
 - `examples/applegame` runnable demo.
 
+## [0.14.1] — 2026-05-27
+
+### Added
+
+- **`AGENTS.md`** at the repo root — a playbook of non-obvious Defold
+  trampas collected while shipping AppleGame end-to-end through the MCP.
+  Covers LuaJIT vs Lua 5.1 linter mismatch, editor-script sandbox rules,
+  render quirks (camera.get_cameras userdata, auto_aspect_ratio), build
+  pipeline (bob resolve + custom dmengine), GUI gotchas
+  (ADJUST_MODE_FIT scaling a 6×6 box to half-screen), mouse-look spin
+  on launch, and the proven screenshot workflow. Read it first when
+  starting a new project — it documents failure modes you'd otherwise
+  hit live. README now points to it explicitly so any LLM that ingests
+  the repo finds it on first pass.
+
 ## [0.14.0] — 2026-05-27
 
 Two crash-class fixes around `editor_screenshot(source="game")` discovered
